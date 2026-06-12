@@ -1,0 +1,31 @@
+# ---- credentials: NEVER commit ----
+# ignore the CONTENTS of accounts/ (real account dirs + tokens), but keep the setup docs.
+# (must be accounts/* not accounts/ — a dir-level ignore stops git descending, breaking the negations)
+accounts/*
+!accounts/.gitkeep
+!accounts/default.example
+!accounts/README.md
+
+# refresh/id tokens wherever they land
+*token*.txt
+refresh_token.txt
+token.txt
+
+# ---- captured traffic: contains live auth + client data ----
+*.har
+
+# ---- output / client data dumps ----
+workflows/
+reports/
+funnels/
+mappings/
+email_templates/
+backup_*.json
+*.xlsx
+*.csv
+
+# ---- python / misc ----
+__pycache__/
+*.pyc
+.env
+.DS_Store
