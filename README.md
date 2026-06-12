@@ -208,6 +208,6 @@ Run with `bash -x ./ghl.sh <args>` to see what's happening. If `base64 -d` compl
 
 ## License / attribution
 
-MIT — see [LICENSE](LICENSE). Built independently from observed network traffic; inspired by the Madani Agency demo of the same idea (https://www.madani.agency/en/tools/ghl-workflow-api).
+MIT — see [LICENSE](LICENSE). Built independently by reverse-engineering the GHL web app's own network traffic.
 
 Not affiliated with or endorsed by GoHighLevel. This uses an undocumented internal API that can change or break without notice — use it on accounts you own or are authorized to administer.
