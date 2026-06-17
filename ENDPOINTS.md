@@ -168,13 +168,16 @@ Reads + most writes captured — calendar setup is ~80% scriptable.
 
 ### Funnels / Sites / Blogs
 - ✅ Funnel list — `GET /funnels/funnel/list?locationId=<loc>`
-- ✅ Single funnel — `GET /funnels/funnel/<id>?locationId=<loc>`
-- ✅ Funnel step — `GET /funnels/funnel/<fid>/step/<sid>?locationId=<loc>`
-- ✅ Page data — `GET /funnels/builder/page/data?pageId=<id>`
-- ✅ Page autosave — `POST /funnels/builder/autosave/<pageId>`
-- ✅ Page list — `GET /funnels/page/list?funnelId=<>&locationId=<>`
-- 🔴 Funnel/step/page create/delete/reorder/publish, A/B test, custom CSS/JS, SEO meta, pixels
-- 🔴 Websites (separate product) + Blogs CRUD
+- ✅ Single funnel — `GET /funnels/funnel/<id>?locationId=<loc>` (`._data.steps[]` → pageId map)
+- ✅ Domains — `GET /funnels/domain?locationId=<loc>`
+- ✅ Page doc — `GET /funnels/page/<pageId>?locationId=<loc>` (→ `pageDataDownloadUrl`, `pageVersion`)
+- ✅ **Create step (+page)** — `POST /funnels/funnel/create-step` — header `version: 2021-07-28`
+- ✅ **Page autosave** — `POST /funnels/builder/autosave/<pageId>` (full `pageData` inline, `manualSave:true`)
+- ✅ **Native drag-and-drop page authoring** — see [`funnel-builder/`](funnel-builder/README.md):
+  schema (flat `section.elements` tree), section bg custom values, saved colors, font injection
+- 🔴 Step/page delete/reorder/publish, A/B test, SEO meta, pixels; Websites + Blogs CRUD
+- ⚠️ Builder writes use **`version: 2021-07-28`** (not 2021-04-15) + a browser `User-Agent`
+  (Cloudflare 1010-bans `python-urllib`)
 
 ---
 
