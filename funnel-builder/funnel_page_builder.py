@@ -177,6 +177,135 @@ def section(rows, seq, bgimg=None, bgcolor="var(--transparent)", pad=(80, 0, 80,
     s["pageId"] = ""; s["funnelId"] = FUNNEL; s["locationId"] = LOC
     return s
 
+# ---------------- CSS compiler (the sectionStyles fix) ----------------
+# GHL renders a page from each section's `general.sectionStyles` CSS string, whose rules are
+# keyed by element id. The element templates ship the ORIGINAL ids in sectionStyles, but the
+# builder regenerates ids -> stale CSS never matches the DOM -> page renders UNSTYLED. We
+# regenerate sectionStyles from each element's actual id + styles. Cracked 2026-06-17.
+_PV = ".hl_page-preview--content "
+
+def _num(d, key, default=None):
+    v = d.get(key)
+    if isinstance(v, dict): return v.get("value", default)
+    return v if v is not None else default
+
+def _lh(styles):
+    lh = styles.get("lineHeight")
+    if isinstance(lh, dict): return f"{lh.get('value', 1.3)}{lh.get('unit', 'em')}"
+    return "1.3em"
+
+def _ls(styles):
+    ls = styles.get("letterSpacing")
+    if isinstance(ls, dict): return f"{ls.get('value', 0)}{ls.get('unit', 'px')}"
+    return "0"
+
+def _weight(styles, default="400"):
+    fw = styles.get("fontWeight", {})
+    return fw.get("desktop", default) if isinstance(fw, dict) else default
+
+def _pad(styles, d=(0, 0, 0, 0)):
+    return (_num(styles, "paddingTop", d[0]), _num(styles, "paddingRight", d[1]),
+            _num(styles, "paddingBottom", d[2]), _num(styles, "paddingLeft", d[3]))
+
+def _malign(mobilestyles):
+    ma = mobilestyles.get("textAlign")
+    return ma.get("value") if isinstance(ma, dict) else None
+
+def _text_css(prefix, eid, styles, extra, mobilestyles):
+    """CSS for a heading/paragraph (both are id-classed `.<prefix>-<id> text-output` divs)."""
+    color  = _num(styles, "color", "var(--text-color)")
+    family = _num(styles, "fontFamily", "var(--headlinefont)")
+    weight = _weight(styles)
+    align  = _num(styles, "textAlign", "center")
+    lh, ls = _lh(styles), _ls(styles)
+    tt = _num(styles, "textTransform", "none")
+    fs = _num(styles, "fontStyle", "normal")
+    size  = _num(extra, "desktopFontSize", 18)
+    msize = _num(extra, "mobileFontSize", size)
+    bg    = _num(styles, "backgroundColor", "var(--transparent)")
+    disp  = _num(styles, "display", "block")
+    pt, pr, pb, pl = _pad(styles)
+    bw = _num(styles, "borderWidth", "0"); bs = _num(styles, "borderStyle", "none")
+    bc = _num(styles, "borderColor", "var(--black)"); radius = _num(styles, "borderRadius", "0")
+    tags = ",".join(f".{prefix}-{eid} {t}" for t in ["h1","h2","h3","h4","h5","h6","p","ul li"])
+    out = [
+        f"{_PV}#{prefix}-{eid}{{margin:0;width:auto;height:auto}}",
+        (f"{_PV}.{prefix}-{eid}{{font-family:{family};color:{color};font-weight:{weight};"
+         f"font-style:{fs};line-height:{lh};text-transform:{tt};letter-spacing:{ls};"
+         f"text-align:{align};opacity:1;text-shadow:none;background-color:{bg};display:{disp};"
+         f"padding:{pt}px {pr}px {pb}px {pl}px;border-color:{bc};border-width:{bw};"
+         f"border-style:{bs};border-radius:{radius}}}"),
+        f".{prefix}-{eid}{{font-weight:{weight};color:{color}}}",
+        f".{prefix}-{eid} a,.{prefix}-{eid} a *{{color:inherit;text-decoration:none}}",
+        f".{prefix}-{eid} a u,.{prefix}-{eid} a:hover{{text-decoration:underline}}",
+        f"{tags},.{prefix}-{eid}.text-output{{font-size:{size}px!important;font-weight:{weight};"
+        f"color:{color};font-family:{family};line-height:{lh}}}",
+    ]
+    mob = []
+    if msize and msize != size:
+        mob.append(f"{tags},.{prefix}-{eid}.text-output{{font-size:{msize}px!important}}")
+    ma = _malign(mobilestyles)
+    if ma:
+        mob.append(f"{_PV}.{prefix}-{eid}{{text-align:{ma}}}")
+    return "".join(out), "".join(mob)
+
+def compile_section_styles(section):
+    md = section["metaData"]; sid = md["id"].replace("section-", "")
+    st = md["styles"]; pt, pr, pb, pl = _pad(st)
+    bg = _num(st, "backgroundColor", "var(--transparent)")
+    out = [":root{--inter:'Inter';--transparent:transparent;--black:#000000}",
+           f"{_PV}.section-{sid}{{box-shadow:none;padding:{pt}px {pr}px {pb}px {pl}px;margin:0;"
+           f"background-color:{bg};backdrop-filter:none;border-color:var(--black);border-width:0;"
+           f"border-style:none;border-radius:0}}",
+           f"#section-{sid}>.inner{{max-width:1170px}}"]
+    mob = []
+    ms = md.get("mobileStyles", {})
+    if ms:
+        mpt = _num(ms, "paddingTop", pt); mpb = _num(ms, "paddingBottom", pb)
+        mob.append(f"{_PV}.section-{sid}{{padding:{mpt}px {pr}px {mpb}px {pl}px}}")
+    for el in section["elements"]:
+        eid = el["id"]
+        if eid.startswith("row-"):
+            rid = eid.replace("row-", "")
+            ar = el.get("class", {}).get("alignRow", {})
+            align = ar.get("value", "row-align-center") if isinstance(ar, dict) else "row-align-center"
+            jc = {"row-align-center": "center", "row-align-left": "flex-start",
+                  "row-align-right": "flex-end"}.get(align, "center")
+            out += [f"{_PV}.row-{rid}{{margin:0 auto;padding:10px 5px;backdrop-filter:none;width:100%}}",
+                    f"{_PV}.row-{rid}{{background-color:var(--transparent);box-shadow:none;"
+                    f"border-color:var(--black);border-width:0;border-style:none;border-radius:0}}",
+                    f"#row-{rid}>.inner{{justify-content:{jc};flex-wrap:wrap}}"]
+        elif eid.startswith("col-"):
+            cid = eid.replace("col-", ""); cs = el["styles"]
+            cpt, cpr, cpb, cpl = _pad(cs, (10, 5, 10, 5))
+            w = _num(cs, "width", 100); cbg = _num(cs, "backgroundColor", "var(--transparent)")
+            bw = _num(cs, "borderWidth", "0"); bs = _num(cs, "borderStyle", "none")
+            bc = _num(cs, "borderColor", "var(--black)"); radius = _num(cs, "borderRadius", "0")
+            out += [f"{_PV}.col-{cid}{{padding:{cpt}px {cpr}px {cpb}px {cpl}px;backdrop-filter:none;"
+                    f"width:{w}%;margin:0}}",
+                    f"{_PV}.col-{cid}{{background-color:{cbg};box-shadow:none;border-color:{bc};"
+                    f"border-width:{bw};border-style:{bs};border-radius:{radius}}}",
+                    f"#col-{cid}>.inner{{flex-direction:column;justify-content:center;"
+                    f"align-items:inherit;flex-wrap:nowrap}}"]
+            lbw = _num(cs, "borderLeftWidth")
+            if lbw:
+                lbs = _num(cs, "borderLeftStyle", "solid"); lbc = _num(cs, "borderLeftColor", "var(--black)")
+                out.append(f"{_PV}.col-{cid}{{border-left-width:{lbw};border-left-style:{lbs};"
+                           f"border-left-color:{lbc}}}")
+            mcs = el.get("mobileStyles", {}); mpad = ""
+            if mcs:
+                a, b, c, d = _pad(mcs, (cpt, cpr, cpb, cpl)); mpad = f"padding:{a}px {b}px {c}px {d}px;"
+            mob.append(f"{_PV}.col-{cid}{{{mpad}width:100%}}")
+        elif eid.startswith("heading-") or eid.startswith("paragraph-"):
+            prefix = "heading" if eid.startswith("heading-") else "paragraph"
+            i = eid.replace(prefix + "-", "")
+            dcss, m = _text_css(prefix, i, el["styles"], el.get("extra", {}), el.get("mobileStyles", {}))
+            out.append(dcss)
+            if m: mob.append(m)
+    if mob:
+        out.append("@media screen and (min-width:0px) and (max-width:480px){" + "".join(mob) + "}")
+    return "".join(out)
+
 # ---------------- page assembly ----------------
 def build_page(sections, headfont="cofo-raffine", bodyfont="Pontano Sans"):
     pd = copy.deepcopy(_T["envelope"])
@@ -190,6 +319,9 @@ def build_page(sections, headfont="cofo-raffine", bodyfont="Pontano Sans"):
         ps = pd.get("pageStyles", "")
         ps = ps.replace(":root{", ":root{" + vars_css, 1) if ":root{" in ps else ":root{" + vars_css + "}\n" + ps
         pd["pageStyles"] = ps; g["pageStyles"] = ps
+    # THE FIX: regenerate each section's compiled CSS to match its actual element ids
+    for s in sections:
+        s.setdefault("general", {})["sectionStyles"] = compile_section_styles(s)
     return pd
 
 def inject_fonts(pageData, head_link):

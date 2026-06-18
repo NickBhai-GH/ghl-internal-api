@@ -29,3 +29,10 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+
+# ---- funnel-builder session scratch (client-specific one-offs, no reuse value) ----
+funnel-builder/build_*.py
+funnel-builder/mintest.py
+funnel-builder/mintest2.py
+funnel-builder/proof.py
+funnel-builder/patch_*.py
