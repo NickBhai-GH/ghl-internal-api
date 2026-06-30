@@ -21,8 +21,8 @@ Quick start:
     tok = B.token()
     GREEN = B.reg_color("Brand Green", "#3d4940ff")
     h = B.heading("<h1>Thank You!</h1>", B.reg_color("Gold","#b3ac80ff"), 70, 42, 500,
-                  "cofo-raffine", align="left"); B.tweak(h, mobile_align="center", lineheight=1.4)
-    p = B.paragraph("<p>Your form submission has been submitted.</p>", "var(--white)", 18, 16, 400, "Pontano Sans")
+                  "<font-key>", align="left"); B.tweak(h, mobile_align="center", lineheight=1.4)
+    p = B.paragraph("<p>Your form submission has been received.</p>", "var(--white)", 18, 16, 400, "Pontano Sans")
     col = B.col([h, p], bg=GREEN, pad=(90,56,110,56), width=56, mobilepad=(44,26,52,26))
     sec = B.section([B.row([col])], 1, bgimg="{{custom_values.hero_background}}",
                     pad=(100,0,100,0), mobilepad=(60,0,60,0))

@@ -4,7 +4,7 @@ Author **native drag-and-drop** GHL funnel pages via the internal API — the sa
 page editor produces, fully editable in the builder afterward (not custom-HTML/code blocks).
 
 `funnel_page_builder.py` is a self-contained helper (templates embedded in `templates.json`,
-no client data). Reverse-engineered from builder HARs on the sandbox sub-account, 2026-06.
+no client data). Reverse-engineered from builder HARs on a sandbox sub-account.
 
 ## The two write endpoints
 
@@ -79,6 +79,32 @@ typeface through the page JSON alone. Two working routes:
   Pick one driver per page at a time.
 - Scratch-build pattern: build into a throwaway funnel, then copy the step to the real funnel
   in the UI and delete the scratch one.
+
+## Known limitation — API-created sections "bleed" in the builder (and the fix)
+
+A section **created from scratch via the API** can render fine on the published/preview domain
+but **bleed in the GHL builder UI** — its `position:fixed` `.bg-fixed` background layer escapes
+the mobile frame and covers the editor. Root cause: GHL has the section's data but never
+*registered* it through its own builder pipeline, so the editor can't contain it. No in-place
+API tweak cures it (CSS dedupe, zero-CSS, adding `_id`, dimension audits — all still bleed).
+
+The reliable workaround is a **Global-Section round-trip** — let GHL "bless" the section natively:
+
+1. Create the **empty section shells in the builder UI** (correct column count per section).
+   Sections a human creates are native and clean; API-*created* sections are what bleed.
+2. **Inject only the content elements** into those native columns via `autosave` — clone GHL's
+   own native heading/paragraph nodes (id-remap + patch their values), append to the target
+   column's `child` + `section.elements` + `sectionStyles`, and merge the brand color vars +
+   custom fonts into the page's `pageStyles`/`general` so `var(--color-*)` and fonts resolve.
+   Injecting into a *native* section does **not** bleed.
+3. Convert each populated section to a **Global Section** in the builder UI → this re-runs it
+   through GHL's builder pipeline, re-registering/recompiling it natively (launders the API
+   content into a first-class section).
+4. Add the global section to a step → drops in clean → then onto the real funnel.
+
+So the API does the tedious content population; the Global-Section round-trip makes it native.
+Trying to compile the section CSS yourself is a dead end (renders on the preview domain, breaks
+in the builder).
 
 ## Usage
 

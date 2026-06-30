@@ -131,13 +131,20 @@ Reads + most writes captured — calendar setup is ~80% scriptable.
   native cross-location copy
 
 ### Email templates (builder)
-- ✅ List — `GET /emails/builder?locationId=<loc>&limit=<n>`
-- ✅ Get data — `GET /emails/builder/data/<loc>/<tid>?isInternal=false` (MJML tree)
-- ✅ Create — `POST /emails/builder?locationId=<loc>` (name/subject don't stick on create)
-- ✅ Save data — `POST /emails/builder/data` (`dnd` field holds editorData)
-- ✅ Update meta — `PUT /emails/builder/meta/<tid>` (the only working endpoint for name/subject)
-- ✅ Delete — `DELETE /emails/builder/<loc>/<templateId>` (note the unusual path order)
-- 🔴 Folders/categories, native clone, AI-generated template
+Builder **writes** use `version: 2021-07-28` + a browser `User-Agent` (Cloudflare 1010-bans `python-urllib`), origin `https://email-home-prod.leadconnectorhq.com`. Pass `updatedBy` = the token's `user_id` on writes.
+- ✅ List — `GET /emails/builder?locationId=<loc>&limit=<n>` → `{builders, total}`. **Returns root-level only** — add `&parentId=<folderId>` to list a folder's contents (dedup-by-name checks miss in-folder templates otherwise).
+- ✅ Get data — `GET /emails/builder/data/<loc>/<tid>?isInternal=false` — MJML `editorData {elements, attrs, templateSettings}`; `attrs[id] = {attributes, content, tagName}` where `content` is the element's inner HTML. Check `errorsPresent`.
+- ✅ Create blank — `POST /emails/builder?locationId=<loc>` `{locationId, name, type, subject}` (types: `html|folder|import|builder|blank|ai_template`; name/subject don't stick on create)
+- ✅ Create folder — `POST /emails/builder/folder` `{name, locationId, type:"folder", updatedBy}` → `{id}`
+- ✅ Clone — `POST /emails/builder/clone` `{locationId, templateId:<src>, name, updatedBy}` → `{id, clone}` (clone a branded master to inherit logo/header/footer)
+- ✅ Save data — `POST /emails/builder/data` `{locationId, templateId, updatedBy, dnd, html:"", editorType:"builder", previewText}` (`dnd` = editorData; server compiles the HTML)
+- ✅ Update meta — `PUT /emails/builder/meta/<tid>` `{fromName, subjectLine, fromAddress, previewText, locationId, updatedBy, fieldDefaults:{}}` — **the only endpoint that sets subject/sender.** ⚠️ `subjectLine`/`previewText` are **plain text** — use real Unicode, not HTML entities (`&rsquo;` renders literally). Body-content entities are fine.
+- ✅ Move to folder — `POST /emails/builder/move` `{id, locationId, parentId:<folderId>, updatedBy}`
+- ✅ Delete — `DELETE /emails/builder/<loc>/<templateId>` (note the unusual path order: location before template id)
+- 🟡 **Wire into a workflow email step** — set the email node's `attributes` to `{subject, from_email, from_name, template_id, templatesource:"email-builder", previewUrl, createdAt, updatedAt, attachments:[]}` (replaces the inline-`html` shape), then save via the workflow PUT (full payload).
+- 🔴 Categories, AI-generated template
+
+> **Recipe — branded template from scratch:** `folder` → `clone` a master → build `dnd` (inject copy into `attrs[id].content`, add an `mj-button` linking via `redirectAction:"url"` + `url`/`href` → `{{custom_values.x}}`) → `data` → `meta` (subject) → `move`.
 
 ### Email broadcasts (drip_schedule)
 - ✅ List — `GET /emails/schedule?locationId=<loc>...`
