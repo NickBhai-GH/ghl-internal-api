@@ -79,6 +79,24 @@ typeface through the page JSON alone. Two working routes:
   Pick one driver per page at a time.
 - Scratch-build pattern: build into a throwaway funnel, then copy the step to the real funnel
   in the UI and delete the scratch one.
+- **The builder reverses `elements[]` on save.** When a human opens an API-built page in the
+  GHL editor and saves, GHL rewrites each section's flat `elements[]` into **post-order**
+  (children before parents, rows bottom-to-top). The `child` id links stay correct, but if you
+  then *fetch that page and re-save it as-is*, it renders **scrambled / empty** — GHL keys
+  rendering off the array order, not the links. Fix: run `reorder_page(pageData)` (or
+  `reorder_section_elements(section)` per section) before `autosave` to restore pre-order DFS.
+  Non-destructive. Watch for this on every read-modify-write of a builder-touched page, and
+  tell the user to hard-refresh the builder after a restore. (`build_page()` already emits
+  correct pre-order, so freshly-built pages are fine until a human re-saves them.)
+- **Inline `style=` in `text.value` survives save/read** — a big lever. GHL preserves inline
+  `background-color` / `border-radius` / `display` / `line-height` attributes inside a
+  heading's/paragraph's HTML through the round-trip. This is how you get things the element
+  styles can't do: GHL ignores wrapper `margin:auto`, so a fixed-width badge left-aligns —
+  instead make it a **full-width, `textAlign:center` heading** with a centered inline-block
+  circle *inside* the HTML:
+  `<h3 style="text-align:center;margin:0;"><span style="display:inline-block;width:44px;height:44px;line-height:44px;border-radius:50%;background-color:#33b878;color:#fff;font-weight:700;">1</span></h3>`.
+  Centered badges, pills, and inline-styled boxes are all doable this way. **Emojis and
+  `{{custom_values.x}}` merge tags in `text.value` also survive** the save/read round-trip.
 
 ## Known limitation — API-created sections "bleed" in the builder (and the fix)
 

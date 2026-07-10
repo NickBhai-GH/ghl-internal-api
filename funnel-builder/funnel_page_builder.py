@@ -15,6 +15,11 @@ Endpoints used (all on backend.leadconnectorhq.com, header `version: 2021-07-28`
 Auth: reuses the toolkit's account tokens (accounts/<name>/token.txt via ghl.sh refresh).
 A browser User-Agent is REQUIRED — Cloudflare 1010-bans the default python-urllib UA.
 
+Round-tripping an existing page? The builder rewrites elements[] into post-order on its own
+saves, so a fetched page re-saved as-is renders scrambled. Call reorder_page(pd) before
+autosave. Inline style= inside a heading's text.value survives the round-trip (centered
+badges/pills), as do emojis and {{custom_values.x}} merge tags. See README.md > Gotchas.
+
 Quick start:
     import funnel_page_builder as B
     B.ACCOUNT, B.LOC, B.FUNNEL = "myaccount", "<locationId>", "<funnelId>"
@@ -41,6 +46,10 @@ LOC      = ""            # locationId
 FUNNEL   = ""            # funnelId to build into
 
 API = "https://backend.leadconnectorhq.com"
+# Origin header sent with builder calls. Any LeadConnector platform domain works; the
+# page-builder host is whitelabel-neutral. If your sub-account is on a white-labeled/custom
+# domain and a call 401s on origin, set this to that domain (e.g. "https://app.<yourbrand>.com").
+ORIGIN = "https://page-builder.leadconnectorhq.com"
 UA  = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
@@ -51,12 +60,12 @@ def token():
     subprocess.run(["./ghl.sh", "-a", ACCOUNT, "refresh"], cwd=TOOLKIT, capture_output=True)
     return open(f"{TOOLKIT}/accounts/{ACCOUNT}/token.txt").read().strip()
 
-def _hdrs(tok, origin="https://wrm.enrolltoday.education"):
+def _hdrs(tok, origin=ORIGIN):
     return {"token-id": tok, "channel": "APP", "version": "2021-07-28", "source": "WEB_USER",
             "origin": origin, "content-type": "application/json",
             "accept": "application/json, text/plain, */*", "user-agent": UA}
 
-def req(method, url, tok, body=None, origin="https://wrm.enrolltoday.education"):
+def req(method, url, tok, body=None, origin=ORIGIN):
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(url, data=data, method=method, headers=_hdrs(tok, origin))
     try:
@@ -71,6 +80,34 @@ def fetch_pagedata(tok, pageId):
     r = urllib.request.Request(doc["pageDataDownloadUrl"], headers={"user-agent": UA})
     pd = json.loads(urllib.request.urlopen(r, timeout=60).read().decode())
     return doc.get("pageVersion", 1), pd
+
+# ---------------- element-order repair (round-trip fix) ----------------
+# The builder REWRITES section.elements[] into POST-order (children before parents, rows
+# bottom-to-top) whenever a human opens + saves the page in the GHL editor. The `child` /
+# metaData.child id links stay correct, but a page fetched after a builder save and re-saved
+# as-is renders SCRAMBLED / EMPTY because GHL keys rendering off the flat array order. Re-sort
+# elements[] into pre-order DFS (section.metaData.child -> each node then its child[]) before
+# autosave. Non-destructive: only reorders, never touches content or links.
+def reorder_section_elements(section):
+    by_id = {e["id"]: e for e in section["elements"]}
+    ordered = []
+    def walk(ids):
+        for i in ids:
+            e = by_id.get(i)
+            if e is None: continue
+            ordered.append(e)
+            walk(e.get("child", []))
+    walk(section.get("metaData", {}).get("child", []))
+    seen = {e["id"] for e in ordered}                       # keep any unreachable orphans
+    ordered += [e for e in section["elements"] if e["id"] not in seen]
+    section["elements"] = ordered
+    return section
+
+def reorder_page(pageData):
+    """Fix every section's elements[] order on a fetched, builder-touched page before re-save."""
+    for s in pageData.get("sections", []):
+        reorder_section_elements(s)
+    return pageData
 
 # ---------------- id helper ----------------
 def rid(prefix):
@@ -307,7 +344,7 @@ def compile_section_styles(section):
     return "".join(out)
 
 # ---------------- page assembly ----------------
-def build_page(sections, headfont="cofo-raffine", bodyfont="Pontano Sans"):
+def build_page(sections, headfont="Inter", bodyfont="Inter"):
     pd = copy.deepcopy(_T["envelope"])
     pd["sections"] = sections; pd["popups"] = []; pd["popupsList"] = []
     pd["fontsForPreview"] = [f"'{headfont}'", f"'{bodyfont}'"]
