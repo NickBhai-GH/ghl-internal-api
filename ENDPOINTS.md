@@ -34,6 +34,9 @@ calls beyond what `ghl.sh` already wraps. All endpoints are on
 - 🔴 Sub-account API key generation (the "Private Integrations" page)
 
 ### Locations / Agency
+- ✅ Audit log — `GET /audit/search?locationId=<loc>...` → field-change history: *who/what/when*
+  changed a contact field, tag, etc. The endpoint that answers "why did this field change?"
+  when a workflow or import did something unexpected.
 - 🔴 Location list (agency view) / create / update / delete
 - 🔴 Location settings (timezone, currency, language), business hours, business profile
 - 🟢 Public API: `/locations/`, `/locations/{locationId}` (GET, PUT)
@@ -46,6 +49,10 @@ calls beyond what `ghl.sh` already wraps. All endpoints are on
 - ✅ Delete — `DELETE /locations/<loc>/customFields/<id>` (success body has a typo: `{succeded: true}`)
 - 🟡 Update — `PUT` (assumed, not verified)
 - 🔴 Field folders, field-level permissions
+  - **Gotcha — DATE fields truncate the time.** There is no DATETIME field type. A `DATE`
+    custom field stores midnight-UTC only, so anything relying on hour-granularity (e.g. a
+    workflow "wait until <field>") loses the time component. Work around it with a parallel
+    text field or a wait-duration node, not a DATE field.
 
 ### Custom values
 - ✅ List — `GET /locations/<loc>/customValues`
@@ -129,6 +136,14 @@ Reads + most writes captured — calendar setup is ~80% scriptable.
 - ✅ Enrollment stats — `GET /workflows/status/search/enroll-stats-cache?workflowIds[]=<wf>&locationId=<loc>`
 - 🔴 Trigger create/delete, publish/unpublish toggle, re-enroll all, pause/resume, templates,
   native cross-location copy
+- **Gotcha — `if_else` 10-branch cap.** The UI stops you at 10 branches; the API will *accept*
+  more but the workflow breaks at runtime past 10. Split into chained if_else nodes instead.
+- **Gotcha — `==` on a `contact_changed` trigger is delta-aware.** A `has-changed` / `==`
+  condition fires only on the *transition* into the value, not on every save while it already
+  equals that value. Don't add a separate "has changed" guard expecting re-fires — you won't
+  get them. (See node/trigger shapes in [`WORKFLOW_NODE_SCHEMAS.md`](WORKFLOW_NODE_SCHEMAS.md).)
+- See [`WORKFLOW_NODE_SCHEMAS.md`](WORKFLOW_NODE_SCHEMAS.md) for the full node/trigger JSON
+  needed to **build** workflow bodies via the create-shell → PUT-body → add-triggers flow.
 
 ### Email templates (builder)
 Builder **writes** use `version: 2021-07-28` + a browser `User-Agent` (Cloudflare 1010-bans `python-urllib`), origin `https://email-home-prod.leadconnectorhq.com`. Pass `updatedBy` = the token's `user_id` on writes.
@@ -172,6 +187,12 @@ Builder **writes** use `version: 2021-07-28` + a browser `User-Agent` (Cloudflar
 - 🔴 Form get-single, create, update (fields/redirect/notifications), delete, embed/preview,
   submissions; survey CRUD (may differ from forms)
 - 🟢 Public API: `/forms/`, `/forms/submissions/`, `/surveys/`, `/surveys/submissions/`
+- **Gotcha — conditional logic: Show beats Hide.** When a field has both a Show and a Hide
+  condition that evaluate true at once, GHL **shows** it. Design branching logic around
+  Show-wins; don't rely on a Hide to override a Show.
+- **Gotcha — surveys need a sticky contact.** Without the location's "sticky contact" setting
+  on, a multi-step survey can orphan its submission (each step looks like a new contact). Turn
+  on sticky contact before wiring surveys that write custom fields across steps.
 
 ### Funnels / Sites / Blogs
 - ✅ Funnel list — `GET /funnels/funnel/list?locationId=<loc>`

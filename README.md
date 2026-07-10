@@ -90,13 +90,28 @@ After this, you never need DevTools again.
 | `get <loc> <wf>` | Download one workflow's full JSON. Saves to `workflows/<loc>/<wf>.json`. |
 | `summary <loc> <wf>` | Pretty-print the node + trigger list of a previously-downloaded workflow. |
 | `dump-all <loc>` | Download every workflow in a location. |
+| `nodes <loc> <wf>` | Live triggers + node list with content snippets — no local dump needed. |
 | `triage <loc>` | Build an enriched CSV: name, status, lifetime + active enrollments, node count, folder, updated. |
 | `enroll-stats <loc> <wf>...` | Live enrollment counts for one or more workflows. |
+| `fields <loc> [model]` | Custom fields (default `contact` model): name \| dataType. |
+| `calendars <loc>` | Calendars: name \| type \| active \| id. |
+| `pipelines <loc>` | Opportunity pipelines + ordered stage list. |
+| `forms <loc>` | Forms: name \| id \| field count. |
+| `contacts <loc>` | Total contact count (cheap import-status check). |
+| `contacts-scan <loc> [...]` | Paginate **all** contacts and hydrate custom-field values inline. Flags: `--where`, `--select`, `--out`, `--csv`, `--list-fields`. |
 | `numbers <loc>` | Phone numbers owned by the location (forwarding target, default flag, RingAll users). |
 | `dialer <loc>` | Dialer view: owned numbers + verified caller IDs + default-outbound mapping. |
 | `inbound <loc>` | Raw Twilio inbound config (voice_url, status_callback, etc.). |
+| `raw <path> [version]` | Dump an arbitrary internal-API GET (escape hatch for endpoints this script doesn't wrap). |
+| `move <loc> <wf> <folder>` | Move a workflow into a folder. **The one write verb** — a reversible reorg; `root` = top level. |
 
-See [`ENDPOINTS.md`](ENDPOINTS.md) for the wider map of GHL's internal API surface beyond what this script wraps.
+Every command is read-only except `move` (a folder reorg that touches no contact data). All
+other writes are deliberate, hand-composed calls per [`AGENTS.md`](AGENTS.md).
+
+See [`ENDPOINTS.md`](ENDPOINTS.md) for the wider map of GHL's internal API surface beyond what
+this script wraps, and [`WORKFLOW_NODE_SCHEMAS.md`](WORKFLOW_NODE_SCHEMAS.md) for the node /
+trigger JSON needed to **build** workflows via the API (not just read them). Native
+drag-and-drop funnel pages: see [`funnel-builder/`](funnel-builder/).
 
 ### Typical flow
 

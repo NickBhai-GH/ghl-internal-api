@@ -28,8 +28,10 @@ Before you do anything, internalize these. They protect the user and the people 
    object — describe exactly what you're about to do and get a yes first.
 5. **Never commit or print credentials.** `accounts/**` holds live tokens (full account
    access). It is git-ignored. Never `cat` a token into chat, never stage it, never paste it.
-6. **Default to read.** The shipped `ghl.sh` only does GETs on purpose. Writes mean composing
-   a `curl` from the shapes in `ENDPOINTS.md`. Treat that as a deliberate, confirmed step.
+6. **Default to read.** Every `ghl.sh` subcommand is a GET except `move` (a folder reorg — the
+   one shipped write verb; reversible, touches no contact data). Any other write means composing
+   a `curl` from the shapes in `ENDPOINTS.md` / `WORKFLOW_NODE_SCHEMAS.md`. Treat that as a
+   deliberate, confirmed step.
 
 ---
 
@@ -114,4 +116,8 @@ it. **HAR files contain live tokens and data — never commit them; `.gitignore`
 - `README.md` — human setup + the full `ghl.sh` command reference.
 - `ENDPOINTS.md` — the map of GHL's internal API surface: what's confirmed, exact shapes, and
   the traps. Your knowledge base for composing calls.
-- `ghl.sh` — the auth engine + read commands. Read `auth_headers()` to see the exact header set.
+- `WORKFLOW_NODE_SCHEMAS.md` — verbatim node/trigger JSON for **building** workflow bodies via
+  the API (create-shell → PUT-body → add-triggers). Read before scripting a workflow build.
+- `funnel-builder/` — author native drag-and-drop funnel pages via the internal API.
+- `ghl.sh` — the auth engine + read commands (`gget()` is the shared GET primitive). Read
+  `auth_headers()` to see the exact header set.
