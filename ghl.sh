@@ -10,7 +10,7 @@
 # Default account is read from accounts/default (one line, account name) or first dir found.
 # Override per-call with `-a <account>`.
 #
-# Subcommands (all read-only except `move`):
+# Subcommands (reads unless marked WRITE):
 #   token-info                Token claims + expiry.
 #   refresh                   Force-mint a new idToken.
 #   parse-url <url>           Extract location_id and workflow_id from a GHL URL.
@@ -19,20 +19,28 @@
 #   get <loc> <wf>            Dump one workflow JSON.
 #   summary <loc> <wf>        Pretty-print node list of a previously-dumped workflow.
 #   dump-all <loc>            Dump every workflow in a location.
-#   nodes <loc> <wf>          Live triggers + node list w/ content snippets (no dump needed).
+#   nodes <loc> <wf>          Live triggers + node list WITH copy snippets (follows Firebase fileUrl).
 #   triage <loc>              Build CSV: name, status, currently_enrolled, node_count, updated.
 #   enroll-stats <loc> <wf>.. Live enrollment counts for one or more workflows.
-#   fields <loc> [model]      Custom fields (default contact model): name | dataType.
-#   calendars <loc>           Calendars: name | type | active | id.
-#   pipelines <loc>           Opportunity pipelines + ordered stage list.
-#   forms <loc>               Forms: name | id | field count.
+#   backup <loc> <wf> [label] Snapshot meta + body + triggers to backups/ before an edit.
+#   meta-diff <meta.json> <loc> <wf>  Prove an edit changed only the node tree.
+#   fields <loc> [model]      Custom fields (default model=contact).
+#   calendars <loc>           Calendars: name/type/active/id.
+#   pipelines <loc>           Pipelines + ordered stages.
+#   forms <loc>               Forms: id/name/field-count.
+#   dispositions <loc>        Custom call dispositions (workflow triggers match these by literal name).
 #   contacts <loc>            Total contact count (cheap import-status check).
-#   contacts-scan <loc> [..]  Paginate ALL contacts + hydrate custom-field values (JSON/CSV).
-#   numbers <loc>             Phone numbers owned by the location (forwarding, default flag, RingAll users).
+#   contacts-scan <loc> ...   Paginate ALL contacts + hydrate custom-field values.
+#                             --list-fields | --where 'Name~sub'/'Name=val' | --select 'A,B'
+#                             | --out f.json | --csv f.csv  (see contacts_scan.py -h)
+#   numbers <loc>             Phone numbers owned by the location (forwarding target, default flag, RingAll users).
 #   dialer <loc>              Dialer view: owned numbers + verified caller IDs + default-outbound mapping.
 #   inbound <loc>             Raw Twilio inbound config (voice_url, status_callback, etc.).
-#   raw <path> [version]      Dump an arbitrary internal-API GET, pretty-printed.
-#   move <loc> <wf> <folder>  Move a workflow into a folder (the one write verb; "root" = top level).
+#   raw <path> [version]      Authenticated GET of any internal-API path (begins with "/"), pretty-printed.
+#   move <loc> <wf> <folder>  WRITE: move a workflow into a folder ("root" = top level).
+#   post <path> <json|@file> [version]   WRITE: authenticated POST, prints the JSON response.
+#   put  <path> <json|@file> [version]   WRITE: authenticated PUT (full payload, see ENDPOINTS.md).
+#   del  <path> [version]                WRITE: authenticated DELETE.
 
 set -euo pipefail
 
@@ -122,19 +130,6 @@ read_token() {
 auth_headers() {
   local tok; tok="$(read_token)"
   printf -- '-H\ntoken-id: %s\n-H\nchannel: APP\n-H\nversion: 2021-04-15\n-H\nsource: WEB_USER\n-H\norigin: %s\n-H\naccept: application/json, text/plain, */*\n' "$tok" "$ORIGIN"
-}
-
-# gget <path> [version] : authenticated GET against $API. <path> begins with "/".
-# The primitive the read subcommands below share. A browser user-agent avoids the
-# Cloudflare 1010 trap on some endpoints (curl's default UA is otherwise fine).
-gget() {
-  local path="$1" ver="${2:-2021-04-15}" tok
-  tok="$(read_token)"
-  curl -sS \
-    -H "token-id: $tok" -H 'channel: APP' -H "version: $ver" -H 'source: WEB_USER' \
-    -H "origin: $ORIGIN" -H 'accept: application/json, text/plain, */*' \
-    -H 'user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36' \
-    "$API$path"
 }
 
 # ----- subcommands -----
@@ -249,6 +244,21 @@ cmd_folders() {
   | jq '[.rows[] | select(.type=="directory") | {id: ._id, name, parentId}]'
 }
 
+# move <loc> <wf_id> <folder_id> : move a workflow into a folder (parentId).
+# Empty/"root" folder_id moves it back to the top level.
+cmd_move() {
+  local loc="$1" wf="$2" folder="${3:-}" tok pid
+  tok="$(read_token)"
+  [[ "$folder" == "root" ]] && folder=""
+  pid="$( [[ -n "$folder" ]] && printf '"%s"' "$folder" || printf 'null' )"
+  curl -sS -w '\nHTTP %{http_code}\n' -X PUT \
+    -H "token-id: $tok" -H 'channel: APP' -H 'version: 2021-04-15' -H 'source: WEB_USER' \
+    -H "origin: $ORIGIN" -H 'content-type: application/json' \
+    -H 'accept: application/json, text/plain, */*' \
+    "$API/workflow/$loc/move-directory/$wf" \
+    --data-raw "{\"parentId\":$pid}"
+}
+
 cmd_numbers() {
   local loc="$1" tok
   tok="$(read_token)"
@@ -299,12 +309,89 @@ cmd_enroll_stats() {
     "$API/workflows/status/search/enroll-stats-cache?${qs}locationId=$loc"
 }
 
-# raw <path> [version] : dump an arbitrary internal-API GET, pretty-printed. The escape
-# hatch for endpoints this script doesn't wrap (path begins with "/").
+# ---- generic authenticated reads (added 2026-06-29) ----------------------
+# gget <path> [version] : authenticated GET against $API. <path> begins with "/".
+# Real browser UA avoids the Cloudflare 1010 trap; curl alone is safe but keep it explicit.
+gget() {
+  local path="$1" ver="${2:-2021-04-15}" tok
+  tok="$(read_token)"
+  curl -sS \
+    -H "token-id: $tok" -H 'channel: APP' -H "version: $ver" -H 'source: WEB_USER' \
+    -H "origin: $ORIGIN" -H 'accept: application/json, text/plain, */*' \
+    -H 'user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36' \
+    "$API$path"
+}
+
+# raw <path> [version] : dump arbitrary internal-API GET, pretty-printed.
+# ---- generic authenticated write helpers (added 2026-09-01) ----
+# gwrite <METHOD> <path> <json_body> [version]
+gwrite() {
+  local method="$1" path="$2" body="$3" ver="${4:-2021-04-15}" tok
+  tok="$(read_token)"
+  curl -sS -X "$method" \
+    -H "token-id: $tok" -H 'channel: APP' -H "version: $ver" -H 'source: WEB_USER' \
+    -H "origin: $ORIGIN" -H 'content-type: application/json' \
+    -H 'accept: application/json, text/plain, */*' \
+    -H 'user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36' \
+    "$API$path" --data-raw "$body"
+}
+gpost() { gwrite POST "$@"; }
+gput()  { gwrite PUT  "$@"; }
+
+# post|put <path> <json-or-@file> [version] / del <path> [version] : raw writes, print the JSON
+# response. Back up first and send FULL payloads on PUT (see AGENTS.md safety contract).
+cmd_del()  { gwrite DELETE "$1" "" "${2:-}" | jq . ; }
+cmd_post() { local b="$2"; [[ "$b" == @* ]] && b="$(cat "${b#@}")"; gpost "$1" "$b" "${3:-}" | jq . ; }
+cmd_put()  { local b="$2"; [[ "$b" == @* ]] && b="$(cat "${b#@}")"; gput  "$1" "$b" "${3:-}" | jq . ; }
+
 cmd_raw() { gget "$1" "${2:-}" | jq . ; }
 
-# nodes <loc> <wf> : workflow meta + trigger names + node list with short content snippets.
-# Follows the Firebase fileUrl for the real node body when present.
+# dispositions <loc> : the Custom Disposition list (the buttons an SDR clicks after
+# a call). NOT under the normal settings API — it lives on /phone-system/. There is
+# no other read path for it, and workflow triggers match these by LITERAL NAME, so
+# a rename silently kills every trigger pointing at the old string.
+cmd_dispositions() {
+  gget "/phone-system/call-dispositions?locationId=$1" \
+    | jq -r '.dispositions | "count: \(length)",
+             (sort_by(.orderingKey)[] | "  [\(.name)]  created \(.createdAt)")'
+}
+
+# backup <loc> <wf> [label] : snapshot meta + real node body + triggers before you
+# edit a LIVE workflow. Always run this first — a body PUT clobbers every field you
+# omit (status, allowMultiple, ...), and this is what you diff against afterwards.
+cmd_backup() {
+  local loc="$1" wf="$2" label="${3:-backup}" stamp dest meta url
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$DIR/backups"
+  dest="$DIR/backups/${label}_${wf:0:8}_${stamp}"
+  meta="$(gget "/workflow/$loc/$wf?includeScheduledPauseInfo=true")"
+  echo "$meta" > "${dest}_meta.json"
+  url="$(echo "$meta" | jq -r '.fileUrl // empty')"
+  [[ -n "$url" ]] && curl -sS "$url" > "${dest}_body.json"
+  gget "/workflow/$loc/$wf?includeTriggers=true" | jq '.triggers' > "${dest}_triggers.json"
+  echo "$meta" | jq -r '"backed up: \(.name)  v\(.version)  status=\(.status // "draft")"'
+  echo "  -> ${dest}_{meta,body,triggers}.json"
+}
+
+# meta-diff <backup_meta.json> <loc> <wf> : prove a body PUT changed ONLY the nodes.
+# Catches the silent clobbers (status -> draft, allowMultiple -> false, note wiped).
+cmd_meta_diff() {
+  local old="$1" loc="$2" wf="$3"
+  gget "/workflow/$loc/$wf?includeScheduledPauseInfo=true" \
+  | jq -s --slurpfile o "$old" '
+      ($o[0]) as $old | .[0] as $new
+      | ["workflowData","fileUrl","filePath","updatedAt","version",
+         "permissionMeta","__v","updatedBy","meta","triggersFilePath"] as $skip
+      | [ (($old|keys) + ($new|keys) | unique)[]
+          | select(. as $k | $skip | index($k) | not)
+          | select($old[.] != $new[.])
+          | "  \(.): \($old[.]|tostring) -> \($new[.]|tostring)" ]
+      | if length == 0 then "meta clean: only the node tree changed"
+        else "SETTINGS CHANGED (restore these):\n" + join("\n") end' -r
+}
+
+# nodes <loc> <wf> : the one I keep rebuilding. Fetches workflow meta, follows
+# fileUrl (Firebase) for the real node body, prints triggers + node list w/ copy snippets.
 cmd_nodes() {
   local loc="$1" wf="$2" meta fileurl
   meta="$(gget "/workflow/$loc/$wf?includeScheduledPauseInfo=true")"
@@ -312,7 +399,7 @@ cmd_nodes() {
   echo "triggers:"
   gget "/workflow/$loc/$wf?includeTriggers=true" | jq -r '(.triggers // [])[] | "  - \(.name // .type)"'
   fileurl="$(echo "$meta" | jq -r '.fileUrl // empty')"
-  [[ -z "$fileurl" ]] && { echo "(no fileUrl; body inline in meta above)"; return; }
+  [[ -z "$fileurl" ]] && { echo "(no fileUrl; body inline above)"; return; }
   echo "nodes:"
   curl -sS "$fileurl" | jq -r '
     .templates[] |
@@ -347,43 +434,32 @@ cmd_forms() {
 
 # contacts <loc> : total contact count (cheap import-status check).
 cmd_contacts() {
+  gget "/contacts/search/duplicate?locationId=$1" >/dev/null 2>&1 || true
   curl -sS -X POST "$API/contacts/search" \
     -H "token-id: $(read_token)" -H 'channel: APP' -H 'version: 2021-04-15' -H 'source: WEB_USER' \
     -H "origin: $ORIGIN" -H 'content-type: application/json' -H 'accept: application/json, text/plain, */*' \
     -d "{\"locationId\":\"$1\",\"pageLimit\":1,\"page\":1}" | jq '{total}'
 }
 
-# contacts-scan <loc> [args] : paginate ALL contacts via /contacts/search/2 and hydrate
-# custom-field VALUES inline. Injects a fresh token; passes the rest to contacts_scan.py.
+# contacts-scan <loc> [contacts_scan.py args] : paginate ALL contacts via
+# /contacts/search/2 and hydrate custom-field VALUES (returned inline). Handy
+# examples:
 #   contacts-scan <loc> --list-fields
-#   contacts-scan <loc> --where 'Tags~vip' --select 'Email,Phone' --csv out.csv
+#   contacts-scan <loc> --where 'Membership Name~Gold' \
+#       --select 'Contract Start Date,Contract End Date,Membership Status'
+#   contacts-scan <loc> --where 'Tags~vip' --csv out.csv
+# Injects a fresh token; passes the rest straight to contacts_scan.py.
 cmd_contacts_scan() {
   local loc="${1:?usage: contacts-scan <loc> [--where ...] [--select ...] [--out f.json] [--csv f.csv] [--list-fields]}"
   shift || true
   python3 "$DIR/contacts_scan.py" --token "$(read_token)" --api "$API" --loc "$loc" "$@"
 }
 
-# move <loc> <wf_id> <folder_id|root> : move a workflow into a folder (its parentId).
-# The ONE write verb this script ships (a reversible reorg, touches no contact data). Every
-# other write in this toolkit is a deliberate hand-composed curl per AGENTS.md. "root" = top level.
-cmd_move() {
-  local loc="$1" wf="$2" folder="${3:-}" tok pid
-  tok="$(read_token)"
-  [[ "$folder" == "root" ]] && folder=""
-  pid="$( [[ -n "$folder" ]] && printf '"%s"' "$folder" || printf 'null' )"
-  curl -sS -w '\nHTTP %{http_code}\n' -X PUT \
-    -H "token-id: $tok" -H 'channel: APP' -H 'version: 2021-04-15' -H 'source: WEB_USER' \
-    -H "origin: $ORIGIN" -H 'content-type: application/json' \
-    -H 'accept: application/json, text/plain, */*' \
-    "$API/workflow/$loc/move-directory/$wf" \
-    --data-raw "{\"parentId\":$pid}"
-}
-
 main() {
   while [[ "${1:-}" == -* ]]; do
     case "$1" in
       -a|--account) ACCOUNT="$2"; shift 2 ;;
-      -h|--help) sed -n '2,35p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      -h|--help) sed -n '2,43p' "${BASH_SOURCE[0]}"; exit 0 ;;
       *) echo "unknown flag: $1" >&2; exit 1 ;;
     esac
   done
@@ -395,6 +471,7 @@ main() {
     parse-url)  cmd_parse_url "$@" ;;
     list)       cmd_list "$@" ;;
     folders)    cmd_folders "$@" ;;
+    move)       cmd_move "$@" ;;
     enroll-stats) cmd_enroll_stats "$@" ;;
     get)        cmd_get "$@" ;;
     summary)    cmd_summary "$@" ;;
@@ -404,15 +481,20 @@ main() {
     dialer)     cmd_dialer "$@" ;;
     inbound)    cmd_inbound "$@" ;;
     raw)        cmd_raw "$@" ;;
+    post)       cmd_post "$@" ;;
+    del)        cmd_del "$@" ;;
+    put)        cmd_put "$@" ;;
     nodes)      cmd_nodes "$@" ;;
     fields)     cmd_fields "$@" ;;
     calendars)  cmd_calendars "$@" ;;
     pipelines)  cmd_pipelines "$@" ;;
+    dispositions) cmd_dispositions "$@" ;;
+    backup)     cmd_backup "$@" ;;
+    meta-diff)  cmd_meta_diff "$@" ;;
     forms)      cmd_forms "$@" ;;
     contacts)   cmd_contacts "$@" ;;
     contacts-scan) cmd_contacts_scan "$@" ;;
-    move)       cmd_move "$@" ;;
-    ""|help)    sed -n '2,35p' "${BASH_SOURCE[0]}" ;;
+    ""|help)    sed -n '2,43p' "${BASH_SOURCE[0]}" ;;
     *) echo "unknown subcommand: $sub" >&2; exit 1 ;;
   esac
 }

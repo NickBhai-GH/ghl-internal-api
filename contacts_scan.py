@@ -81,7 +81,7 @@ def cf_value(entry, ftype=""):
 
 def resolve_cf(contact, id2name, id2type):
     out = {}
-    for e in contact.get("customFields", []):
+    for e in (contact.get("customFields") or []):
         fid = e.get("id")
         if not fid:
             continue

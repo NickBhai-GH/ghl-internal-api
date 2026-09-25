@@ -5,7 +5,7 @@ A small bash toolkit that dumps complete workflow content (every node, SMS body,
 It uses GoHighLevel's **internal** API (the same one their UI calls), not the public API. The public API only returns workflow name/status/ID. The internal API returns every detail.
 
 > **Using an AI assistant (Claude Code, Cursor, etc.)?** Point it at this repo and have it read
-> **[`AGENTS.md`](AGENTS.md)** first — that's the operating manual for an agent driving this
+> **[`AGENTS.md`](AGENTS.md)** first: that's the operating manual for an agent driving this
 > toolkit on your behalf (bootstrap, safety contract, and recipes for pulling data out / pushing
 > config in). [`ENDPOINTS.md`](ENDPOINTS.md) is the wider map of the internal API it can compose against.
 
@@ -20,15 +20,21 @@ ghl-internal-api/
 ├── ghl.sh                              # main script (chmod 700)
 ├── triage.py                           # enriched triage CSV builder (used by `triage`)
 ├── export_xlsx.py                      # one-sheet-per-workflow audit xlsx from local dumps
-├── accounts/                           # one dir per account/whitelabel — all git-ignored
+├── accounts/                           # one dir per account/whitelabel, all git-ignored
 │   ├── default                         # one line: the default account name
 │   └── <name>/
-│       ├── refresh_token.txt           # long-lived Firebase refresh token (chmod 600) — KEYS TO THE KINGDOM
+│       ├── refresh_token.txt           # long-lived Firebase refresh token (chmod 600), KEYS TO THE KINGDOM
 │       └── token.txt                   # short-lived idToken, auto-rotated (chmod 600)
 ├── workflows/                          # output directory (git-ignored)
 │   └── <location_id>/
 │       └── <workflow_id>.json
 ├── reports/                            # triage/audit output (git-ignored)
+├── backups/                            # `ghl.sh backup` snapshots (git-ignored)
+├── funnel-builder/                     # native drag-and-drop funnel page authoring
+├── ENDPOINTS.md                        # map of the internal API: shapes, status, traps
+├── WORKFLOW_NODE_SCHEMAS.md            # node + trigger JSON for building workflows, documents
+├── CALENDARS.md                        # calendar build recipe + knob-to-field map
+├── AGENTS.md                           # operating manual for an AI assistant driving this repo
 └── README.md                           # this file
 ```
 
@@ -90,12 +96,13 @@ After this, you never need DevTools again.
 | `get <loc> <wf>` | Download one workflow's full JSON. Saves to `workflows/<loc>/<wf>.json`. |
 | `summary <loc> <wf>` | Pretty-print the node + trigger list of a previously-downloaded workflow. |
 | `dump-all <loc>` | Download every workflow in a location. |
-| `nodes <loc> <wf>` | Live triggers + node list with content snippets — no local dump needed. |
+| `nodes <loc> <wf>` | Live triggers + node list with content snippets: no local dump needed. |
 | `triage <loc>` | Build an enriched CSV: name, status, lifetime + active enrollments, node count, folder, updated. |
 | `enroll-stats <loc> <wf>...` | Live enrollment counts for one or more workflows. |
 | `fields <loc> [model]` | Custom fields (default `contact` model): name \| dataType. |
 | `calendars <loc>` | Calendars: name \| type \| active \| id. |
 | `pipelines <loc>` | Opportunity pipelines + ordered stage list. |
+| `dispositions <loc>` | Custom Dispositions (the buttons an agent clicks after a call). Lives on `/phone-system/`, not the normal settings API. Workflow triggers match these by **literal name**, so a rename silently kills every trigger pointing at the old string. |
 | `forms <loc>` | Forms: name \| id \| field count. |
 | `contacts <loc>` | Total contact count (cheap import-status check). |
 | `contacts-scan <loc> [...]` | Paginate **all** contacts and hydrate custom-field values inline. Flags: `--where`, `--select`, `--out`, `--csv`, `--list-fields`. |
@@ -103,10 +110,43 @@ After this, you never need DevTools again.
 | `dialer <loc>` | Dialer view: owned numbers + verified caller IDs + default-outbound mapping. |
 | `inbound <loc>` | Raw Twilio inbound config (voice_url, status_callback, etc.). |
 | `raw <path> [version]` | Dump an arbitrary internal-API GET (escape hatch for endpoints this script doesn't wrap). |
-| `move <loc> <wf> <folder>` | Move a workflow into a folder. **The one write verb** — a reversible reorg; `root` = top level. |
+| `move <loc> <wf> <folder>` | Move a workflow into a folder (a reversible reorg; `root` = top level). |
+| `post <path> <json\|@file> [version]` | **Write.** Authenticated POST to any internal-API path; prints the JSON response. Pass `2021-07-28` as the version for funnels, forms, email builder, products and WhatsApp. |
+| `put <path> <json\|@file> [version]` | **Write.** Authenticated PUT. Most internal PUTs replace the whole object, so send the full payload you got from a GET. |
+| `del <path> [version]` | **Write.** Authenticated DELETE. |
+| `backup <loc> <wf> [label]` | Snapshot meta + real node body + triggers to `backups/`. Run this **before** any edit to a live workflow. |
+| `meta-diff <backup_meta.json> <loc> <wf>` | Diff a workflow's settings against a backup. Proves an edit changed only the node tree, and catches the silent clobbers described below. |
 
-Every command is read-only except `move` (a folder reorg that touches no contact data). All
-other writes are deliberate, hand-composed calls per [`AGENTS.md`](AGENTS.md).
+### Editing a live workflow without breaking it
+
+A body `PUT` overwrites every field you leave out, not just the node tree. A minimal
+`{name, version, parentId, workflowData}` payload will silently reset `status` to draft,
+flip `allowMultiple` to false (so a contact can then only ever enter **once**), and wipe
+the workflow note. None of that surfaces as an error.
+
+```bash
+./ghl.sh backup <loc> <wf> pre_edit          # 1. snapshot first
+#                                              2. make your change
+./ghl.sh meta-diff backups/pre_edit_*_meta.json <loc> <wf>   # 3. prove nothing else moved
+```
+
+Step 3 should print `meta clean: only the node tree changed`. Anything else listed is a
+setting you clobbered and need to restore from the backup.
+
+More traps worth knowing:
+
+- **Creating a trigger:** the workflow id goes in the request **body** as `workflowId`, not
+  as a `?workflowId=` query param. As a query param the API returns `200 {"id": ...}` but the
+  trigger is never bound to the workflow, a completely silent no-op.
+- **Send `status:"draft"` and `triggersChanged:true` on every trigger POST.** Without them the
+  trigger is stored **live** even when the body says `active:false`.
+- **Re-POSTing a trigger duplicates it.** It does not update the old one, so you end up with a
+  second, still-active copy. Edit in place with `PUT /workflow/{loc}/trigger/{id}` (full trigger
+  object), or `DELETE /workflow/{loc}/trigger/{id}` and create it again.
+
+The named subcommands are read-only except `move` (a folder reorg that touches no contact
+data). `post`, `put` and `del` are raw write verbs: they send exactly what you give them, so
+treat each one as a deliberate, backed-up, confirmed step per [`AGENTS.md`](AGENTS.md).
 
 See [`ENDPOINTS.md`](ENDPOINTS.md) for the wider map of GHL's internal API surface beyond what
 this script wraps, and [`WORKFLOW_NODE_SCHEMAS.md`](WORKFLOW_NODE_SCHEMAS.md) for the node /
@@ -165,7 +205,7 @@ GET https://backend.leadconnectorhq.com/workflow/{LOCATION_ID}/{WORKFLOW_ID}?inc
 ```
 
 Required headers:
-- `token-id: <firebase_jwt>` (this is the auth — note it is NOT `Authorization: Bearer`)
+- `token-id: <firebase_jwt>` (this is the auth: note it is NOT `Authorization: Bearer`)
 - `channel: APP`
 - `origin: https://client-app-automation-workflows.leadconnectorhq.com`
 - `accept: application/json, text/plain, */*`
@@ -194,9 +234,9 @@ The minted idToken has a `locations: [<one_id>]` claim, but the backend's workfl
 
 ## Security notes
 
-- `accounts/<name>/refresh_token.txt` is the equivalent of a long-lived password. Anyone with that file can act as you across every sub-account you have admin on. Keep it `chmod 600`. Do NOT commit it to git, paste it in chat, or share it. The bundled `.gitignore` already excludes the whole `accounts/` tree — keep it that way.
+- `accounts/<name>/refresh_token.txt` is the equivalent of a long-lived password. Anyone with that file can act as you across every sub-account you have admin on. Keep it `chmod 600`. Do NOT commit it to git, paste it in chat, or share it. The bundled `.gitignore` already excludes the whole `accounts/` tree, keep it that way.
 - `token.txt` is short-lived (1 hour) but still sensitive while valid.
-- `ghl.sh` itself only does GETs — a deliberate safe default. Writes (PUT/POST/DELETE) are
+- `ghl.sh` itself only does GETs: a deliberate safe default. Writes (PUT/POST/DELETE) are
   possible by composing `curl` from the shapes in [`ENDPOINTS.md`](ENDPOINTS.md) using the same
   auth headers; treat them as deliberate, backed-up, confirmed steps (see the safety contract in
   [`AGENTS.md`](AGENTS.md)).
@@ -223,6 +263,6 @@ Run with `bash -x ./ghl.sh <args>` to see what's happening. If `base64 -d` compl
 
 ## License / attribution
 
-MIT — see [LICENSE](LICENSE). Built independently by reverse-engineering the GHL web app's own network traffic.
+MIT, see [LICENSE](LICENSE). Built independently by reverse-engineering the GHL web app's own network traffic.
 
-Not affiliated with or endorsed by GoHighLevel. This uses an undocumented internal API that can change or break without notice — use it on accounts you own or are authorized to administer.
+Not affiliated with or endorsed by GoHighLevel. This uses an undocumented internal API that can change or break without notice, use it on accounts you own or are authorized to administer.

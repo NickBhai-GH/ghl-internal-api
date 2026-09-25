@@ -36,3 +36,6 @@ funnel-builder/mintest*.py
 funnel-builder/proof.py
 funnel-builder/*_native.json
 funnel-builder/patch_*.py
+
+# ghl.sh backup snapshots: real workflow + client data
+backups/
