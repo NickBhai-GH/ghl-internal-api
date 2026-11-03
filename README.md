@@ -20,6 +20,8 @@ ghl-internal-api/
 ├── ghl.sh                              # main script (chmod 700)
 ├── triage.py                           # enriched triage CSV builder (used by `triage`)
 ├── export_xlsx.py                      # one-sheet-per-workflow audit xlsx from local dumps
+├── har_index.py                        # index your own HAR captures into an endpoint catalogue
+├── har/                                # your HAR captures (git-ignored: live account data)
 ├── accounts/                           # one dir per account/whitelabel, all git-ignored
 │   ├── default                         # one line: the default account name
 │   └── <name>/
@@ -32,6 +34,8 @@ ghl-internal-api/
 ├── backups/                            # `ghl.sh backup` snapshots (git-ignored)
 ├── funnel-builder/                     # native drag-and-drop funnel page authoring
 ├── ENDPOINTS.md                        # map of the internal API: shapes, status, traps
+├── ENDPOINT_INDEX.md                   # every endpoint seen in captures (method + path)
+├── HAR_NOTES.md                        # call sequences behind UI actions, headers, gotchas
 ├── WORKFLOW_NODE_SCHEMAS.md            # node + trigger JSON for building workflows, documents
 ├── CALENDARS.md                        # calendar build recipe + knob-to-field map
 ├── AGENTS.md                           # operating manual for an AI assistant driving this repo

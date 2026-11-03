@@ -127,6 +127,10 @@ it. **HAR files contain live tokens and data. Never commit them; `.gitignore` al
   the traps. Your knowledge base for composing calls.
 - `WORKFLOW_NODE_SCHEMAS.md`: verbatim node/trigger JSON for **building** workflow bodies via
   the API (create-shell → PUT-body → add-triggers). Read before scripting a workflow build.
+- `ENDPOINT_INDEX.md`: every endpoint seen in captures (about 800, method + path). Check here
+  before telling the user something "has no endpoint".
+- `HAR_NOTES.md`: what the UI actually sends for common actions, headers per service, pages that
+  write on open, and gotchas. `har_index.py` indexes the user's own HARs in `har/` (output stays local).
 - `funnel-builder/`: author native drag-and-drop funnel pages via the internal API.
 - `CALENDARS.md`: calendar build recipe (create → configure → availability → notifications →
   group → activate → verify free slots) and the knob-to-field map.

@@ -24,7 +24,8 @@ Base `API=https://backend.leadconnectorhq.com`. All calls need header set:
 | Read body | `GET /workflow/{loc}/{wf}?includeScheduledPauseInfo=true` | → `{name,version,parentId,status,workflowData}` (`status:null` = draft) |
 | Read triggers | `GET /workflow/{loc}/{wf}?includeTriggers=true` | → `{triggers:[…]}` (no `workflowData`, no `status`) |
 | Version history | `GET /workflow/{loc}/{wf}/history` | one row per saved version: `version, updatedAt, updatedBy, status, name, fileUrl` (see §6) |
-| Delete | `DELETE /workflow/{loc}/{wf}` | also works on a folder id; removes the workflow's sticky notes too |
+| Delete | `DELETE /workflow/{loc}/{wf}` | also works on a folder id; removes the workflow's sticky notes too. Bulk form the UI uses: `DELETE /workflow/{loc}/delete` with body `{type:"workflow", workflowIds:[...], updatedBy}` |
+| Publish | `PUT /workflow/{loc}/{wf}` | the full payload with `status:"published"` (works on a never-published draft; the UI refuses a workflow with no steps) |
 
 `version` on PUT: send the value from the GET (starts at 1). `parentId` = the workflow's
 folder id (null = root). Products/custom-fields writes use a DIFFERENT header set: `version:2021-07-28`,

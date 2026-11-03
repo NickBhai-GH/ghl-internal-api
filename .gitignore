@@ -39,3 +39,9 @@ funnel-builder/patch_*.py
 
 # ghl.sh backup snapshots: real workflow + client data
 backups/
+
+# har_index.py output built from YOUR captures (bodies + file names): local only.
+# ENDPOINT_INDEX.md (paths only) is the shareable one.
+HAR_ENDPOINTS.md
+HAR_FILES.md
+har/

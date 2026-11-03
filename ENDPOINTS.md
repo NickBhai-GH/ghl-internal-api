@@ -6,6 +6,11 @@ calls beyond what `ghl.sh` already wraps. All endpoints are on
 [`README.md`](README.md#how-it-works-under-the-hood) (`token-id`, `channel: APP`, `version: 2021-04-15`,
 `source: WEB_USER`, `origin`).
 
+Companion files: [`ENDPOINT_INDEX.md`](ENDPOINT_INDEX.md) lists every endpoint seen in captures
+(about 800, method + path), and [`HAR_NOTES.md`](HAR_NOTES.md) has the call sequences and gotchas
+behind UI actions. Index your own captures with `python3 -I har_index.py` (see
+[Capturing a new endpoint](#capturing-a-new-endpoint)).
+
 > Undocumented and unsupported. Shapes here were observed from real network traffic and may
 > change without notice. Confirm against a fresh capture if a call behaves unexpectedly, and
 > read the safety contract in [`AGENTS.md`](AGENTS.md) before any write.
@@ -34,6 +39,11 @@ calls beyond what `ghl.sh` already wraps. All endpoints are on
   on many endpoints (`/contacts/*` included), which reads like a permissions problem and is not.
   `ghl.sh` sets one; hand-rolled Python `urllib` does not.
 - Auth is the `token-id: <idToken>` header, never `authorization: Bearer`.
+- The workflow builder itself sends **no `version` header** on its workflow calls, and the calendar
+  UI sends `2021-07-28`. The one header that really matters is `x-reporting-api-version: 3` on
+  dashboard edits.
+- Some pages **write when you only open them** (default configs on Reputation, Client portal,
+  ads report tabs, dashboard preferences). Expect those in audit logs and captures; see `HAR_NOTES.md`.
 
 ---
 
@@ -121,7 +131,9 @@ calls beyond what `ghl.sh` already wraps. All endpoints are on
 - ✅ Bulk add/remove on contacts: `POST /contacts/bulk/tags/update/<add|remove>`
   `{locationId, contacts:[<≤100 contact ids>], tags:[…]}` (`version: 2021-07-28`) →
   `{succeeded, errorCount}`. Batch in 100s with a short sleep.
-- 🔴 Rename, delete, tag folders
+- ✅ Delete: `DELETE /locations/<loc>/tags/<tagId>` (`version: 2021-07-28`). Restorable for 2 months per the UI.
+- ✅ Create from inside the workflow builder: `POST /workflow/<loc>/tags/create` `{tag}` → `OK`
+- 🟡 Rename and tag categories: captured, see `HAR_NOTES.md`
 
 ### Contacts
 - ✅ Paginate everything: `POST /contacts/search/2` `{locationId, page:N, pageLimit:100, sort:[], filters:[]}`.
@@ -137,12 +149,19 @@ calls beyond what `ghl.sh` already wraps. All endpoints are on
   **Send the contact's FULL existing `customFields` array plus your additions**, not just the
   deltas. Proof loop: `contacts-scan --out before.json` → write → scan again → diff every field
   on every contact.
+- ✅ Notes: create `POST /notes/?locationId=<loc>`
+  `{body:"<p>html</p>", title, color, relations:[{objectKey:"contact", recordId:<contactId>}]}` → `{note:{id}}`;
+  delete `DELETE /notes/<id>?locationId=<loc>` (`version: 2021-07-28`)
 - 🔴 Delete, merge, bulk import (use the UI for imports)
 
 ### Custom objects
 - 🟡 10-per-location cap (hard limit, same on every plan). Records inside are unlimited, so
   don't spend a slot on a backend cache nobody looks at.
-- 🔴 Custom object + record CRUD, relationships, permissions
+- ✅ Record CRUD (proven on Companies, which is the `business` object): create
+  `POST /objects/<objectId>/records` `{locationId, properties:{name}}`; update
+  `PUT /objects/<objectId>/records/<id>?locationId=` `{properties:{…}}`; delete
+  `DELETE /objects/<objectId>/records/<id>`. The object id differs per location (`GET /objects/` lists them).
+- 🔴 Object schema CRUD, relationships, permissions
 
 ---
 
@@ -206,7 +225,10 @@ Step-by-step recipe and knob-to-field map: **[`CALENDARS.md`](CALENDARS.md)**.
 - ✅ Lost reasons: `GET /reporting/dashboards/internal-ref/lost-reasons?locationId=`
 - ✅ Create / move an opportunity inside a workflow: node shapes in
   [`WORKFLOW_NODE_SCHEMAS.md`](WORKFLOW_NODE_SCHEMAS.md) (`create_opportunity`, `internal_update_opportunity`)
-- 🔴 Pipeline update/delete, stage edits, direct opportunity CRUD/search
+- ✅ Update / stage edits: `PUT /opportunities/pipelines/<id>` with the FULL stages array; existing
+  stages keep their `id`, new stages are sent without one. The UI also sends `colorRenderMode:"dot"`.
+- ✅ Delete: `DELETE /opportunities/pipelines/<id>`
+- 🔴 Direct opportunity CRUD (`POST /opportunities/search` is captured, see `ENDPOINT_INDEX.md`)
 - 🟢 Public API: `/opportunities/pipelines/`, `/opportunities/search`, `/opportunities/`
 
 ### Products / prices / payment links
@@ -229,7 +251,9 @@ Step-by-step recipe and knob-to-field map: **[`CALENDARS.md`](CALENDARS.md)**.
   captureCustomerPhone, captureCustomerAddress, allowPromotionCodes, paymentButtonText,
   redirectionDetails:{enabled:false, targetTab:"_self"}, automaticDeactivation:{enable:false, type:"date"},
   branding, termsNote}`
-- 🔴 Product update/delete, variants, images, order forms, subscriptions, coupons, tax/shipping
+- ✅ Update: `PUT /products/<id>` (full product; existing prices keep their `_id`). Delete:
+  `DELETE /products/<id>?locationId=<loc>`
+- 🔴 Variants, images, order forms, subscriptions, coupons, tax/shipping
 - 🟢 Public API: `/products/`, `/products/{id}`
 
 ### Invoices
@@ -253,8 +277,10 @@ Step-by-step recipe and knob-to-field map: **[`CALENDARS.md`](CALENDARS.md)**.
   send `type`, and `?limit=50` on the list returns zero rows (cap at 10).
 
 ### Courses / memberships 🔴
-- 🔴 Course CRUD, lessons, drip, offers, member progress. The portal-level config is readable
-  (see Client portal above); offers/products under memberships are not reachable on this token.
+- ✅ Offer + product names/ids: `GET /membership/smart-list/offers-products/<loc>` →
+  `{products:[{product_name, product_id}], offers:[{offer_name, offer_id, source}]}`
+- 🟡 Course dashboard, analytics and community reads are captured (see `ENDPOINT_INDEX.md`)
+- 🔴 Course CRUD, lessons, drip, offer content/pricing, member progress writes
 
 ---
 
@@ -265,7 +291,9 @@ Step-by-step recipe and knob-to-field map: **[`CALENDARS.md`](CALENDARS.md)**.
 - ✅ Get body: `GET /workflow/<loc>/<wf>?includeScheduledPauseInfo=true` (nodes may sit behind a Firebase `fileUrl`)
 - ✅ Get triggers: `GET /workflow/<loc>/<wf>?includeTriggers=true` (a DIFFERENT envelope: no
   name/status/body. Use both calls.)
-- ✅ Create shell: `POST /workflow/<loc>` `{name, locationId}`; folder = same with `type:"directory"`
+- ✅ Create shell: `POST /workflow/<loc>` `{name, locationId}`; folder = same with `type:"directory"`.
+  The UI sends a fuller body (`status:"draft", parentId:null, workflowData:{templates:[]}, allowMultiple:true,
+  stopOnResponse:false, location_id, company_id, ...`) and gets back `{id}` (a UUID).
 - ✅ Update: `PUT /workflow/<loc>/<wf>`
   - **Clobber rule:** PUT resets every top-level field you omit: status (a live workflow drops to
     draft), `allowMultiple` (contacts can then only enter once), `stopOnResponse`, `meta`,
@@ -275,7 +303,9 @@ Step-by-step recipe and knob-to-field map: **[`CALENDARS.md`](CALENDARS.md)**.
   - The last node's `next` must be `""`; Firebase stores `null`, and PUTting that back is a
     400 "Next is invalid".
   - Around any edit: `./ghl.sh backup` before, `./ghl.sh meta-diff` after.
-- ✅ Delete: `DELETE /workflow/<loc>/<wf>` (also works on folders; removes the canvas stickies)
+- ✅ Delete: `DELETE /workflow/<loc>/<wf>` (also works on folders; removes the canvas stickies).
+  The UI uses the bulk form `DELETE /workflow/<loc>/delete` with a body
+  `{type:"workflow", workflowIds:[…], updatedBy:<userId>}` → `{deletedIds, failures}`.
 - ✅ Move to folder: `PUT /workflow/<loc>/move-directory/<wf>` `{parentId}` (`ghl.sh move`)
 - ✅ Trigger create: `POST /workflow/<loc>/trigger` with `workflowId` **in the body** and
   `status:"draft"`, `triggersChanged:true`, `active:false`. Without those two flags the trigger is
@@ -291,8 +321,16 @@ Step-by-step recipe and knob-to-field map: **[`CALENDARS.md`](CALENDARS.md)**.
   update `PATCH /workflows/sticky-note?_id=<id>&locationId=`; list all on a canvas
   `GET /workflows/sticky-notes-all?workflowId=&locationId=`. Colours seen: yellow, blue, pink.
   One-per-workflow alternative: the top-level `workflowNote` field (settings panel), set via the full PUT.
-- 🟡 Publish a never-published draft by sending `status:"published"` (untested; keeping an
-  already-live workflow live this way is proven)
+- ✅ Publish: the normal full PUT with `status:"published"` (proven on a never-published draft).
+  Unpublish = same with `status:"draft"`. The UI will not publish a workflow with no steps, and it
+  calls `POST /workflow/<loc>/<wf>/validate-workflows` and `POST /workflow/<loc>/validate-assets` before saving.
+- ✅ Adding a trigger in the UI = `POST /workflow/<loc>/trigger` then `PUT /workflow/<loc>/only-triggers/<wf>`
+  (a full-workflow PUT that bumps `version`). Tag trigger condition:
+  `{operator:"index-of-true", field:"tagsAdded", value:"<tag>", id:"tag-added"}`.
+- ✅ One past version with body + triggers inline: `GET /workflow/<loc>/<wf>/history-by-number/<n>`
+  (the only place old trigger configs are visible)
+- 🟡 Execution logs: `GET /workflows/status/search/workflow-with-filter` lists enrolments, then
+  `GET /workflows/logs/v2?executionId=` returns step events with skip reasons and condition traces
 - 🔴 Re-enroll all, pause/resume, workflow templates, native cross-location copy
   - The UI's "copy to another sub-account" copies the shell and triggers but NOT the nodes. Fill
     them with a PUT, and delete the "zombie" custom fields GHL auto-creates for unknown field ids.
@@ -402,6 +440,11 @@ All on `version: 2021-07-28`.
   isGdprCompliant, isOptimisePageLoad, stopAllSplitTestsAndReset:null, requireCreditCard,
   storeCurrencyFormatting, autoGenerateSchema}`, each filled from the funnel's `_data` (snake_case there).
 - ✅ **Create step (+page)**: `POST /funnels/funnel/create-step`
+  `{step:{id:<new uuid>, name, url, pages:[], type:"optin_funnel_page", split:false, control_traffic:100}, funnelId}`
+- ✅ **Delete step**: `POST /funnels/funnel/delete-step` `{funnelId, stepId}`
+- ✅ **Publish a page**: the same autosave call with `pageType:"live"` and no `manualSave`
+  (there is no separate publish endpoint)
+- The builder refuses to save a page with **no sections** ("No sections found ... Aborting Save").
 - ✅ **Page autosave**: `POST /funnels/builder/autosave/<pageId>` (full `pageData` inline, `pageVersion` +1, `manualSave:true`)
   - `section.general.sectionStyles` (the compiled CSS per element id) is MANDATORY or the page
     renders unstyled and the builder read 500s. `funnel-builder/` regenerates it for you.
@@ -411,7 +454,7 @@ All on `version: 2021-07-28`.
 - **Custom Code element on pages:** it gets NO merge-tag substitution, HTML-escapes content, and
   scripts gated on `window.load` never fire (the page is a Vue SPA). Put live JS in the page's
   Tracking Code (footer) instead and run it via `document.readyState`.
-- 🔴 Step delete/reorder, publish, A/B test, pixels; Websites + Blogs CRUD
+- 🔴 Step reorder, A/B test, pixels; Websites + Blogs CRUD
 - ⚠️ Builder writes use **`version: 2021-07-28`** (not 2021-04-15) + a browser `User-Agent`
 
 ---
@@ -444,8 +487,30 @@ All on `version: 2021-07-28`.
   `activityBuffer.add` is silently ignored; `create` is the key. Layout ids are the dashboardWidget `_id`.
   A created widget has no x/y until you send a full layout, and the next PUT 422s until you do.
 - ✅ Saved date range: `PUT /reporting/dashboards/<id>/preference`
+- 🟡 Pull dashboard numbers without the UI: `POST /reporting/dashboards/<module>` (module paths
+  come from `widgets-definitions` `_settings.apiConfig.path`); body + defaults in `HAR_NOTES.md`.
+- 🟡 Account health checks: `GET /reporting/notification` returns the registry of banner checks
+  (workflows unpublished, calendar or Google disconnected, email/SMS blocked, wallet...), each with
+  its own check URL answering `{show: true|false}`. Useful for an audit.
+- **Opening a dashboard writes:** the UI PUTs `preference` and `widget-preference` on load.
 - **Gotcha:** opportunity widgets count the CURRENT stage only, so stage÷stage conversion ratios can
   exceed 100%. Cohort on `date_added` and use `status` (won/lost) + lost reason instead.
+
+### Audit logs
+- ✅ `GET /audit/search/v2?page=1&pageSize=20&startAt=<iso>&endAt=<iso>&locationId=<loc>[&documentType=PIPELINE]`
+  → every create/update/delete with who, when and a full before/after JSON (pipelines, companies,
+  notes and more). **Workflows are not a module in the audit log.**
+
+### Media library
+- ✅ Folder: `POST /medias/folder` `{name, parentId:"", altId:<loc>, altType:"location", mode:"public"}`
+- ✅ Upload is 3 calls: `POST /medias/files/` `{name, contentType, size, parentId:"", altType:"location", altId, mode:"public"}`
+  → a signed `storage.googleapis.com` URL; `PUT` the raw bytes there (no GHL headers); then
+  `POST /medias/files/verify` `{altId, altType, id, mode}`. Public URL:
+  `https://assets.cdn.filesafe.space/<loc>/media/<fileId>.<ext>`
+- ✅ Rename / tags / description / alt text: `POST /medias/<fileId>` `{name, altId, altType, tags, description, altText}`
+- ✅ Trash: `PUT /medias/delete-files` `{altId, altType, mode, lastUpdatedBy, status:"trashed", filesToBeDeleted:[{_id, altId, altType}]}`;
+  delete forever = same with `status:"deleted"`; restore = `PUT /medias/update-files`
+  `{filesToBeUpdated:[{id, deleted:false, status:"restored", type}], altId, lastUpdatedBy, mode}`. Trash purges after 30 days.
 
 ### Users / teams
 - ✅ User list: `GET services.leadconnectorhq.com/users/?locationId=<loc>` (resolves `updatedBy` ids)
@@ -469,7 +534,7 @@ All on `version: 2021-07-28`.
 - **Snapshots**: list / create-from-location / apply / load-status / share / versioning.
 - **SaaS settings**: plan + pricing config, sub-account limit overrides, credit reselling,
   signup form, white-label branding.
-- **Marketplace apps**, **Social planner**, **Reputation**, **AI agents**, **Media library**,
+- **Marketplace apps**, **Social planner**, **AI agents** (Reputation reads are captured, see `ENDPOINT_INDEX.md`),
   **subaccount-level custom CSS/JS**.
 
 ---
@@ -502,6 +567,14 @@ When you need something marked 🔴:
 4. Extract method, URL, query params, the `token-id`-style header set, and the request body.
 5. Replicate it with the auth token from `./ghl.sh refresh`. Verify against a sandbox
    sub-account first.
+
+For a whole area at once: clear the Network log, do one feature in the UI, export the HAR
+(DevTools export button), repeat per feature, and drop the files in `har/`. Then
+`python3 -I har_index.py` writes `HAR_ENDPOINTS.md` (every endpoint with redacted request and
+response shapes, marked **new** if no doc here mentions it) and `HAR_FILES.md` (what each capture
+hit). Both stay local (git-ignored); `ENDPOINT_INDEX.md` is the paths-only, shareable version.
+`--selftest` checks the parser. Exports from current Chrome are "sanitized" (no auth headers),
+but bodies still carry account data.
 
 > HAR files and cURL copies contain **live tokens and account data**. Never commit them, the
 > bundled `.gitignore` blocks `*.har`. Delete them when done.
