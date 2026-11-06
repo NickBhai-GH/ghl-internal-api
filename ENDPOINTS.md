@@ -53,7 +53,7 @@ behind UI actions. Index your own captures with `python3 -I har_index.py` (see
 - ✅ Firebase refresh-token flow (`POST securetoken.googleapis.com/v1/token?key=<firebaseKey>`)
 - ✅ Header set (`token-id`, `channel`, `version`, `source`, `origin`, browser UA)
 - ✅ Auto-refresh when <60s remain on the idToken (see `ghl.sh`)
-- ✅ Multi-account via `accounts/<name>/refresh_token.txt`
+- ✅ Multi-account via an encrypted KeePassXC vault (`accounts/vault.kdbx`), auto-locks after `accounts/lock_minutes`
 - 🔴 Public-API OAuth2 flow (`services.leadconnectorhq.com/oauth/token`: `client_id` +
   `client_secret` + `refresh_token`; different scopes from the internal token)
 - 🔴 Public-API installable-app (marketplace) flow

@@ -26,8 +26,8 @@ Before you do anything, internalize these. They protect the user and the people 
    atomic and the internal API has clobber traps (see `ENDPOINTS.md`).
 4. **Confirm destructive or bulk operations.** Deletes, mass updates, anything touching >1
    object, describe exactly what you're about to do and get a yes first.
-5. **Never commit or print credentials.** `accounts/**` holds live tokens (full account
-   access). It is git-ignored. Never `cat` a token into chat, never stage it, never paste it.
+5. **Never commit or print credentials.** `accounts/**` holds the token vault and live
+   idTokens (full account access). It is git-ignored. Never `cat` a token into chat, never stage it, never paste it.
 6. **Default to read.** The named `ghl.sh` subcommands are GETs, except `move` (a reversible
    folder reorg) and `backup` (writes a local file only). The raw verbs `post`, `put` and `del`
    send whatever body you give them to the live account. Every use of them is a deliberate,
@@ -38,16 +38,19 @@ Before you do anything, internalize these. They protect the user and the people 
 
 ## Bootstrap (do this once, at the start of a session)
 
-1. **Check tooling:** `bash`, `curl`, `jq`, `base64` must be present. `python3` + `openpyxl`
+1. **Check tooling:** `bash`, `curl`, `jq`, `base64`, `python3` and KeePassXC (`keepassxc-cli` or the Flathub app) must be present. `python3` + `openpyxl`
    only if the user wants `triage`/xlsx export.
 2. **Check auth:** run `./ghl.sh token-info`.
    - If it prints token claims with `seconds_remaining > 0`, you're authenticated. Note the
      `role`, `type`, and `location_ids`: they tell you what the user can reach.
-   - If it errors with "no account configured" or a missing `refresh_token.txt`, the user has
-     not set up credentials yet. Walk them through **Setup** in `README.md` (capturing a
-     Firebase refresh token from their logged-in browser). You cannot do this step for them:
-     it requires their browser session. Ask them to paste the token into
-     `accounts/<name>/refresh_token.txt` themselves.
+   - A KeePassXC password popup may appear: the toolkit is locked (it relocks every
+     `accounts/lock_minutes`, default 60). The user types the vault password; you never ask
+     for it, see it, or store it. "wrong vault password" or "Cancelled" = stop and tell them.
+   - If it errors with "no account configured", "no vault" or "no '<name>' entry in the
+     vault", the user has not set up credentials yet. Walk them through **Setup** in
+     `README.md` (capturing a Firebase refresh token from their logged-in browser). You cannot
+     do this step for them: it requires their browser session. They store it themselves with
+     `wl-paste | ./ghl.sh vault-add <name>`. Never write a refresh token to a file.
 3. **Confirm the target account.** `./ghl.sh token-info` shows which account/role is active.
    If the user manages several, agree on which `-a <account>` to use before acting.
 

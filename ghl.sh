@@ -2,7 +2,11 @@
 # GHL internal workflow API toolkit (multi-account).
 #
 # Layout:
-#   accounts/<name>/refresh_token.txt    Long-lived Firebase refresh token (chmod 600).
+#   accounts/vault.kdbx                  KeePassXC vault: one entry per account (title = account
+#                                        name, password = long-lived Firebase refresh token).
+#   accounts/lock_minutes                Optional, one number: minutes until the toolkit locks again
+#                                        and asks for the vault password (default 60, 0 = until reboot).
+#   $XDG_RUNTIME_DIR/ghl/<name>          Refresh token while unlocked. RAM only, wiped on lock/reboot.
 #   accounts/<name>/token.txt            Short-lived idToken; auto-refreshed when <60s remain.
 #   workflows/<location_id>/<wf>.json    Per-workflow dump output.
 #   reports/<location_id>-triage.csv     Triage CSV output.
@@ -11,6 +15,10 @@
 # Override per-call with `-a <account>`.
 #
 # Subcommands (reads unless marked WRITE):
+#   unlock                    Ask for the vault password, load refresh tokens into RAM.
+#   lock                      Wipe the tokens now (happens by itself after lock_minutes).
+#   save                      Write rotated refresh tokens back into the vault.
+#   vault-add <name>          Store an account's refresh token (stdin) in the vault; creates it if missing.
 #   token-info                Token claims + expiry.
 #   refresh                   Force-mint a new idToken.
 #   parse-url <url>           Extract location_id and workflow_id from a GHL URL.
@@ -52,6 +60,10 @@ API="https://backend.leadconnectorhq.com"
 ORIGIN="https://client-app-automation-workflows.leadconnectorhq.com"
 FIREBASE_KEY="AIzaSyB_w3vXmsI7WeQtrIOkjR6xTRVN5uOieiE"
 REFRESH_THRESHOLD=60
+VAULT="$ACCOUNTS_DIR/vault.kdbx"
+RAM="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ghl"
+LOCK_MINUTES="$(tr -d '\n\r ' 2>/dev/null < "$ACCOUNTS_DIR/lock_minutes" || true)"
+[[ "$LOCK_MINUTES" =~ ^[0-9]+$ ]] || LOCK_MINUTES=60
 
 ACCOUNT=""
 
@@ -64,12 +76,12 @@ resolve_account() {
     tr -d '\n\r ' < "$ACCOUNTS_DIR/default"
     return
   fi
-  ls "$ACCOUNTS_DIR" 2>/dev/null | head -1
+  local d; for d in "$ACCOUNTS_DIR"/*/; do [[ -d "$d" ]] && basename "$d"; break; done
 }
 
 acct_dir() {
   local name; name="$(resolve_account)"
-  [[ -z "$name" ]] && { echo "ERROR: no account configured. Add accounts/<name>/refresh_token.txt." >&2; exit 1; }
+  [[ -z "$name" ]] && { echo "ERROR: no account configured. Add one with: ./ghl.sh vault-add <name>." >&2; exit 1; }
   echo "$ACCOUNTS_DIR/$name"
 }
 
@@ -83,16 +95,117 @@ decode_payload() {
 
 token_exp() { decode_payload "$1" | jq -r '.exp // 0'; }
 
+# keepassxc-cli: native install, else the Flathub KeePassXC app.
+kp() {
+  if command -v keepassxc-cli >/dev/null; then keepassxc-cli "$@"
+  else flatpak run --command=keepassxc-cli org.keepassxc.KeePassXC "$@"; fi
+}
+
+# Vault password: desktop popup (KDE or GNOME), terminal prompt otherwise. Printed to stdout for a pipe.
+ask_pw() {
+  if [[ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]] && command -v kdialog >/dev/null; then
+    kdialog --title "GHL toolkit" --password "$1"
+  elif [[ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]] && command -v zenity >/dev/null; then
+    zenity --password --title "GHL toolkit: $1"
+  else
+    local p; read -rsp "$1: " p </dev/tty; echo >&2; printf '%s\n' "$p"
+  fi
+}
+
+# Unlocked = tokens in RAM and the lock time not reached yet. When not, ask for the password now.
+is_unlocked() { [[ -d "$RAM" ]] && (( $(cat "$RAM/.expires" 2>/dev/null || echo 0) > $(date +%s) )); }
+ensure_unlocked() { is_unlocked || cmd_unlock; }
+
 read_refresh() {
-  local f; f="$(acct_dir)/refresh_token.txt"
-  [[ -f "$f" ]] || { echo "ERROR: $f missing." >&2; exit 1; }
+  ensure_unlocked
+  local f; f="$RAM/$(resolve_account)"
+  [[ -s "$f" ]] || { echo "ERROR: no '$(resolve_account)' entry in the vault. Add it: ./ghl.sh vault-add $(resolve_account)" >&2; exit 6; }
   tr -d '\n\r ' < "$f"
+}
+
+# Store one token in the vault (edit if the entry exists, add if not).
+vault_put() {
+  local name="$1" tok="$2" pw="$3" act=add
+  printf '%s\n' "$pw" | kp show -q "$VAULT" "$name" >/dev/null 2>&1 && act=edit
+  printf '%s\n%s\n' "$pw" "$tok" | kp "$act" -q -p "$VAULT" "$name" >/dev/null
+}
+
+# Write tokens Firebase rotated while unlocked back into the vault, so they survive the lock.
+save_rotated() {
+  local f name
+  for f in "$RAM"/*.rotated; do
+    [[ -e "$f" ]] || continue
+    name="$(basename "$f" .rotated)"
+    vault_put "$name" "$(tr -d '\n\r ' < "$RAM/$name")" "$1" || { echo "ERROR: could not save $name (wrong password?)." >&2; exit 1; }
+    rm -f "$f"; echo "Saved rotated token for $name." >&2
+  done
+}
+
+cmd_unlock() {
+  [[ -f "$VAULT" ]] || { echo "ERROR: no vault at $VAULT. Add an account first: ./ghl.sh vault-add <name>" >&2; exit 1; }
+  local pw csv exp
+  pw="$(ask_pw "KeePassXC vault password")" || { echo "Cancelled." >&2; exit 1; }
+  save_rotated "$pw"
+  csv="$(printf '%s\n' "$pw" | kp export -q -f csv "$VAULT")" || { echo "ERROR: wrong vault password." >&2; exit 1; }
+  rm -rf "$RAM"; (umask 077; mkdir -p "$RAM")
+  printf '%s' "$csv" | python3 -I -c '
+import csv, re, sys, os
+n = 0
+for r in csv.DictReader(sys.stdin):
+    if re.fullmatch(r"[A-Za-z0-9_-]+", r["Title"]) and r["Password"]:
+        with open(os.path.join(sys.argv[1], r["Title"]), "w") as f: f.write(r["Password"] + "\n")
+        n += 1
+print(f"Unlocked {n} accounts", end=" ", file=sys.stderr)' "$RAM"
+  if (( LOCK_MINUTES )); then
+    exp=$(( $(date +%s) + LOCK_MINUTES * 60 )); echo "for $LOCK_MINUTES minutes." >&2
+    # Wipe the tokens at the lock time even if nothing runs. ponytail: needs systemd --user;
+    # without it the lock only kicks in on the next ghl.sh call (the .expires check above).
+    if command -v systemd-run >/dev/null; then
+      systemctl --user stop ghl-autolock.timer >/dev/null 2>&1 || true
+      systemd-run --user -q --collect --unit=ghl-autolock --on-active="${LOCK_MINUTES}m" "$DIR/ghl.sh" lock >/dev/null 2>&1 || true
+    fi
+  else
+    exp=99999999999; echo "until reboot." >&2
+  fi
+  echo "$exp" > "$RAM/.expires"
+}
+
+# Refuses while rotated tokens are unsaved (they would be lost); the next unlock saves them.
+cmd_lock() {
+  compgen -G "$RAM/*.rotated" >/dev/null && { echo "ERROR: unsaved rotated tokens. Run ./ghl.sh save first." >&2; exit 1; }
+  rm -rf "$RAM" "$ACCOUNTS_DIR"/*/token.txt
+  echo "Locked." >&2
+}
+
+cmd_save() {
+  local pw
+  compgen -G "$RAM/*.rotated" >/dev/null || { echo "Nothing to save." >&2; return; }
+  pw="$(ask_pw "KeePassXC vault password (saving rotated tokens)")" || exit 1
+  save_rotated "$pw"
+}
+
+cmd_vault_add() {
+  local name="${1:?usage: printf %s TOKEN | ./ghl.sh vault-add <name>}" tok pw pw2
+  [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "ERROR: bad account name." >&2; exit 1; }
+  tok="$(tr -d '\n\r ')"; [[ -n "$tok" ]] || { echo "ERROR: no token on stdin." >&2; exit 1; }
+  if [[ ! -f "$VAULT" ]]; then
+    pw="$(ask_pw "New vault password")" || exit 1
+    pw2="$(ask_pw "Repeat new vault password")" || exit 1
+    [[ -n "$pw" && "$pw" == "$pw2" ]] || { echo "ERROR: passwords empty or different." >&2; exit 1; }
+    printf '%s\n%s\n' "$pw" "$pw" | kp db-create -q -p "$VAULT" >/dev/null || { echo "ERROR: could not create $VAULT." >&2; exit 1; }
+    echo "Created $VAULT." >&2
+  else
+    pw="$(ask_pw "KeePassXC vault password (adding $name)")" || exit 1
+  fi
+  vault_put "$name" "$tok" "$pw" || { echo "ERROR: vault write failed (wrong password?)." >&2; exit 1; }
+  (umask 077; mkdir -p "$ACCOUNTS_DIR/$name"; [[ -d "$RAM" ]] && printf '%s\n' "$tok" > "$RAM/$name" || true)
+  echo "Added $name to the vault." >&2
 }
 
 do_refresh() {
   local refresh resp new_id new_refresh tf rf
   tf="$(acct_dir)/token.txt"
-  rf="$(acct_dir)/refresh_token.txt"
+  rf="$RAM/$(resolve_account)"
   refresh="$(read_refresh)"
   resp="$(curl -sS -X POST "https://securetoken.googleapis.com/v1/token?key=$FIREBASE_KEY" \
     -H 'Content-Type: application/x-www-form-urlencoded' \
@@ -107,8 +220,8 @@ do_refresh() {
   fi
   printf '%s\n' "$new_id" > "$tf"; chmod 600 "$tf"
   if [[ -n "$new_refresh" && "$new_refresh" != "$refresh" ]]; then
-    printf '%s\n' "$new_refresh" > "$rf"; chmod 600 "$rf"
-    echo "refresh_token rotated for $(resolve_account)" >&2
+    printf '%s\n' "$new_refresh" > "$rf"; chmod 600 "$rf"; : > "$rf.rotated"
+    echo "WARNING: refresh_token rotated for $(resolve_account). Run ./ghl.sh save (or it is saved at the next unlock)." >&2
   fi
 }
 
@@ -122,6 +235,7 @@ ensure_fresh_token() {
 }
 
 read_token() {
+  ensure_unlocked
   ensure_fresh_token
   tr -d '\n\r ' < "$(acct_dir)/token.txt"
 }
@@ -459,13 +573,17 @@ main() {
   while [[ "${1:-}" == -* ]]; do
     case "$1" in
       -a|--account) ACCOUNT="$2"; shift 2 ;;
-      -h|--help) sed -n '2,43p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      -h|--help) sed -n '2,51p' "${BASH_SOURCE[0]}"; exit 0 ;;
       *) echo "unknown flag: $1" >&2; exit 1 ;;
     esac
   done
   local sub="${1:-}"
   shift || true
   case "$sub" in
+    unlock)     cmd_unlock ;;
+    lock)       cmd_lock ;;
+    save)       cmd_save ;;
+    vault-add)  cmd_vault_add "$@" ;;
     token-info) cmd_token_info ;;
     refresh)    cmd_refresh ;;
     parse-url)  cmd_parse_url "$@" ;;
@@ -494,7 +612,7 @@ main() {
     forms)      cmd_forms "$@" ;;
     contacts)   cmd_contacts "$@" ;;
     contacts-scan) cmd_contacts_scan "$@" ;;
-    ""|help)    sed -n '2,43p' "${BASH_SOURCE[0]}" ;;
+    ""|help)    sed -n '2,51p' "${BASH_SOURCE[0]}" ;;
     *) echo "unknown subcommand: $sub" >&2; exit 1 ;;
   esac
 }

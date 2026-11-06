@@ -7,6 +7,7 @@ accounts/*
 !accounts/README.md
 
 # refresh/id tokens wherever they land
+*.kdbx
 *token*.txt
 refresh_token.txt
 token.txt

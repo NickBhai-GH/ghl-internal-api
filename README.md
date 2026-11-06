@@ -22,10 +22,12 @@ ghl-internal-api/
 ├── export_xlsx.py                      # one-sheet-per-workflow audit xlsx from local dumps
 ├── har_index.py                        # index your own HAR captures into an endpoint catalogue
 ├── har/                                # your HAR captures (git-ignored: live account data)
-├── accounts/                           # one dir per account/whitelabel, all git-ignored
+├── test_vault.sh                       # self-check for the vault + auto-lock (throwaway vault)
+├── accounts/                           # all git-ignored
+│   ├── vault.kdbx                      # KeePassXC vault: one entry per account, password = refresh token
+│   ├── lock_minutes                    # optional: minutes before it locks again (default 60, 0 = until reboot)
 │   ├── default                         # one line: the default account name
 │   └── <name>/
-│       ├── refresh_token.txt           # long-lived Firebase refresh token (chmod 600), KEYS TO THE KINGDOM
 │       └── token.txt                   # short-lived idToken, auto-rotated (chmod 600)
 ├── workflows/                          # output directory (git-ignored)
 │   └── <location_id>/
@@ -42,7 +44,7 @@ ghl-internal-api/
 └── README.md                           # this file
 ```
 
-The toolkit is **multi-account**: each `accounts/<name>/` holds the credentials for one
+The toolkit is **multi-account**: each vault entry holds the refresh token for one
 logged-in GHL/whitelabel session. Pick which one a command uses with `-a <name>`; the
 default (when `-a` is omitted) is read from `accounts/default`.
 
@@ -52,33 +54,54 @@ default (when `-a` is omitted) is read from `accounts/default`.
 - `curl`
 - `jq`
 - `base64` (GNU coreutils)
+- `python3`
+- KeePassXC: `keepassxc-cli` on your PATH, or the Flathub app `org.keepassxc.KeePassXC`
+- For the password popup: `kdialog` (KDE) or `zenity` (GNOME). Without either you get a terminal prompt.
 
-All standard on Linux/macOS.
+All standard on Linux/macOS except KeePassXC.
 
 ## Setup (one-time)
 
-You need to capture a Firebase **refresh token** from a logged-in GHL browser session. After this, the script keeps itself authenticated forever (until you log out everywhere or change your password).
+You need to capture a Firebase **refresh token** from a logged-in GHL browser session. The token is stored only inside an encrypted KeePassXC vault, never as a plain file on disk.
 
 1. Log in to GHL (or your whitelabel) in Chrome.
 2. Open DevTools (F12) → **Network** tab → filter **Fetch/XHR** → clear the log.
 3. Reload the page (or click into any workflow).
 4. Find a request to `identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken`. If you don't see one, log out and log back in to trigger it. (Easier alternative: right-click anywhere in the Network panel → **Save all as HAR with content** → search the HAR file for `signInWithCustomToken`.)
 5. Click that request → **Response** tab → copy the value of the `refreshToken` field (a long string starting with `AMf-...`).
-6. Create an account dir and paste the token in as a single line (pick any name you like for the account, e.g. `main`):
+6. Store it in the vault (pick any account name, e.g. `main`). Copy the token to your clipboard, then:
    ```
-   mkdir -p accounts/main
-   echo 'AMf-vBy...' > accounts/main/refresh_token.txt
-   chmod 600 accounts/main/refresh_token.txt
+   wl-paste | ./ghl.sh vault-add main      # X11: xclip -o -sel clip | ...   macOS: pbpaste | ...
    echo 'main' > accounts/default          # make it the default account
    ```
-7. Test it:
+   The first time, this creates `accounts/vault.kdbx` and asks you to choose a vault password.
+7. Choose how long the toolkit stays unlocked (optional, default 60 minutes):
+   ```
+   echo 60 > accounts/lock_minutes         # minutes; 0 = stay unlocked until reboot
+   ```
+8. Test it:
    ```
    ./ghl.sh refresh
    ```
-   You should see token info with `seconds_remaining: 3600`.
+   A password popup appears; after it you should see token info with `seconds_remaining: 3600`.
 
 Repeat for as many accounts as you manage. Target a non-default one per call with `-a <name>`.
 After this, you never need DevTools again.
+
+### Locking
+
+The vault password unlocks every account for `lock_minutes` (default 60). The tokens are
+copied to RAM (`$XDG_RUNTIME_DIR/ghl/`), never to disk. When the time is up they are wiped
+(a `systemd --user` timer; without systemd the check happens on the next call), along with
+the cached idTokens, and the next `ghl.sh` call pops up the password again. You never have to
+run `unlock` by hand, but you can:
+
+```
+./ghl.sh unlock     # ask for the password now
+./ghl.sh lock       # wipe the tokens now
+./ghl.sh save       # write rotated refresh tokens into the vault (also done at the next unlock)
+bash test_vault.sh  # self-check on a throwaway vault
+```
 
 ## Usage
 
@@ -234,11 +257,11 @@ The minted idToken has a `locations: [<one_id>]` claim, but the backend's workfl
 
 ### Auto-refresh logic
 
-`ghl.sh` checks the idToken's `exp` claim before every API call. If less than 60 seconds remain, it silently runs the Firebase refresh, writes the new id_token to `token.txt`, and proceeds. If Firebase rotates the refresh_token, that's also written back to `refresh_token.txt`.
+`ghl.sh` checks the idToken's `exp` claim before every API call. If less than 60 seconds remain, it silently runs the Firebase refresh, writes the new id_token to `token.txt`, and proceeds. If Firebase rotates the refresh_token, the new one is kept in RAM and written into the vault at the next unlock (or `./ghl.sh save`). `lock` refuses to wipe a rotated token that has not been saved yet.
 
 ## Security notes
 
-- `accounts/<name>/refresh_token.txt` is the equivalent of a long-lived password. Anyone with that file can act as you across every sub-account you have admin on. Keep it `chmod 600`. Do NOT commit it to git, paste it in chat, or share it. The bundled `.gitignore` already excludes the whole `accounts/` tree, keep it that way.
+- A refresh token is the equivalent of a long-lived password that skips 2FA. Anyone with it can act as you across every sub-account you have admin on. It lives only in the encrypted `accounts/vault.kdbx` and, while unlocked, in RAM. Never write one to a file on disk, commit it, paste it in chat, or share it. The bundled `.gitignore` already excludes the whole `accounts/` tree and `*.kdbx`, keep it that way.
 - `token.txt` is short-lived (1 hour) but still sensitive while valid.
 - `ghl.sh` itself only does GETs: a deliberate safe default. Writes (PUT/POST/DELETE) are
   possible by composing `curl` from the shapes in [`ENDPOINTS.md`](ENDPOINTS.md) using the same
@@ -249,6 +272,12 @@ The minted idToken has a `locations: [<one_id>]` claim, but the backend's workfl
 - This uses GHL's internal API. It's not officially supported and could break or be blocked at any time. Treat it as best-effort tooling, not a contract.
 
 ## Troubleshooting
+
+**Password popup every time / "wrong vault password"**
+Check `accounts/lock_minutes` holds a plain number. "Wrong vault password" means exactly that; nothing was unlocked.
+
+**"no '<name>' entry in the vault"**
+The account name (from `-a` or `accounts/default`) has no vault entry. Add it with `./ghl.sh vault-add <name>`.
 
 **"Firebase refresh failed" with `INVALID_REFRESH_TOKEN` or `TOKEN_EXPIRED`**
 The refresh token has been revoked. Re-capture it (see Setup).
